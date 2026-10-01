@@ -17,8 +17,21 @@ public sealed record NumpyArray(int[] Shape,float[] Values)
     public static NumpyArray Read(ZipArchive archive,string name,CancellationToken cancellation=default)
     {
         var entry=archive.GetEntry(name)??throw new InvalidDataException("Missing model array: "+name);
-        if(entry.Length<10||entry.Length>128*1024*1024)throw new InvalidDataException("Model array exceeds the 128 MiB limit.");
-        using var stream=entry.Open();using var reader=new BinaryReader(stream,Encoding.ASCII);
+        using var stream=entry.Open();
+        return Read(stream,entry.Length,name,cancellation);
+    }
+
+    /// <summary>Reads a standalone .npy file.</summary>
+    public static NumpyArray ReadFile(string path,CancellationToken cancellation=default)
+    {
+        using var stream=File.OpenRead(path);
+        return Read(stream,stream.Length,Path.GetFileName(path),cancellation);
+    }
+
+    public static NumpyArray Read(Stream stream,long length,string name,CancellationToken cancellation=default)
+    {
+        if(length<10||length>512L*1024*1024)throw new InvalidDataException("Model array exceeds the 512 MiB limit.");
+        var reader=new BinaryReader(stream,Encoding.ASCII,leaveOpen:true);
         if(!reader.ReadBytes(6).SequenceEqual(new byte[]{0x93,78,85,77,80,89}))throw new InvalidDataException("Invalid NPY signature.");
         var major=reader.ReadByte();var minor=reader.ReadByte();
         if(major is not (1 or 2 or 3)||minor!=0)throw new NotSupportedException("Unsupported NPY version.");
@@ -31,9 +44,9 @@ public sealed record NumpyArray(int[] Shape,float[] Values)
         if(!dimensions.Success||order.Length==0)throw new InvalidDataException("Invalid NPY header.");
         var shape=dimensions.Groups[1].Value.Split(',').Where(v=>!string.IsNullOrWhiteSpace(v)).Select(v=>int.Parse(v.Trim(),CultureInfo.InvariantCulture)).ToArray();
         if(shape.Length>8||shape.Any(v=>v<0))throw new InvalidDataException("Invalid NPY dimensions.");
-        long count=1;foreach(var d in shape){count=checked(count*d);if(count>32*1024*1024)throw new InvalidDataException("NPY element limit exceeded.");}
+        long count=1;foreach(var d in shape){count=checked(count*d);if(count>128*1024*1024)throw new InvalidDataException("NPY element limit exceeded.");}
         var size=dtype switch{"<f4" or "<i4" or "<u4"=>4,"<f8" or "<i8"=>8,"|u1" or "|b1"=>1,_=>throw new NotSupportedException("Non-numeric or unsupported NPY dtype: "+dtype)};
-        if(entry.Length!=6+2+(major==1?2:4)+headerBytes+count*size)throw new InvalidDataException("NPY storage length mismatch.");
+        if(length!=6+2+(major==1?2:4)+headerBytes+count*size)throw new InvalidDataException("NPY storage length mismatch.");
         var bytes=new byte[checked((int)(count*size))];
         for(var offset=0;offset<bytes.Length;)
         {cancellation.ThrowIfCancellationRequested();var n=stream.Read(bytes,offset,Math.Min(65536,bytes.Length-offset));if(n==0)throw new EndOfStreamException();offset+=n;}
