@@ -209,15 +209,15 @@ public sealed class TextToAnimationWindow : Widget
 
 		// the prompt: describe a new animation or a change to the open one
 		_editorDownload = center.Add( new DownloadStrip( this, Flow ) );
-		_editPrompt = center.Add( new PromptComposer( this, "Describe a change…" ) { FixedHeight = 112 } );
+
+		// the dock: prompt, transport, timeline
+		var timelineCard = center.Add( new TaCard( this ) );
+		_editPrompt = timelineCard.Layout.Add( new PromptComposer( timelineCard, "Describe a change…" ) );
 		_editPrompt.ShowLength = false;
 		_editPrompt.Submitted = prompt => _ = RunEditPromptAsync( prompt );
 		_editPrompt.StopRequested = () => Flow.Cancel();
-		_editPrompt.TargetCleared = () => SetIntent( EditIntent.New );
-		_intentChip = _editPrompt.AddChip( PromptRequests.IntentName( _intent ), "bolt", ShowIntentMenu, "What the prompt does" );
-
-		// timeline + transport
-		var timelineCard = center.Add( new TaCard( this ) { FixedHeight = 132 } );
+		_intentChip = _editPrompt.AddChip( PromptRequests.IntentName( _intent ), "bolt", ShowIntentMenu, "What the prompt does: change this animation, fill between pinned frames, variations, or a new animation" );
+		timelineCard.Layout.Add( new TaDivider( timelineCard ) );
 		var transport = timelineCard.Layout.AddRow();
 		transport.Spacing = 4;
 		transport.Add( TaStyle.Icon( timelineCard, "first_page", () => Session.Seek( 0 ), "Go to start (Home)" ) );
@@ -234,7 +234,7 @@ public sealed class TextToAnimationWindow : Widget
 		}
 		_time = transport.Add( TaStyle.Muted( new Label( "", timelineCard ) ), 1 );
 		transport.Add( TaStyle.Icon( timelineCard, "help_outline", () => { }, "Timeline: Shift+drag selects frames · double click the Pinned lane pins a pose · right click for more" ) );
-		_timeline = timelineCard.Layout.Add( new TimelineWidget( timelineCard, Session ), 1 );
+		_timeline = timelineCard.Layout.Add( new TimelineWidget( timelineCard, Session ) { FixedHeight = 84 } );
 		_timeline.BuildContextMenu = BuildTimelineMenu;
 
 		// right: the tools, full height
@@ -418,7 +418,13 @@ public sealed class TextToAnimationWindow : Widget
 	{
 		var clip = Session.ActiveClip;
 		var intent = clip is null ? EditIntent.New : _intent;
-		_intentChip.Text = PromptRequests.IntentName( intent );
+		var name = clip is null ? "" : clip.Name.Length > 24 ? clip.Name[..23] + "…" : clip.Name;
+		_intentChip.Text = intent switch
+		{
+			EditIntent.Change => $"Change {name}",
+			EditIntent.Variations => $"Variations of {name}",
+			_ => PromptRequests.IntentName( intent ),
+		};
 		_editPrompt.ShowLength = intent == EditIntent.New;
 		_editPrompt.AllowEmpty = intent is EditIntent.FillBetween or EditIntent.Variations;
 		_editPrompt.SetTarget( intent == EditIntent.Change ? clip?.Name : null );

@@ -32,7 +32,7 @@ public sealed class StartPage : Widget
 		center.Add( new BigIcon( this ) );
 		center.Add( new Label.Subtitle( "Drop a model", this ) { Alignment = TextFlag.Center } );
 		center.Add( TaStyle.Muted( new Label( "VMDL", this ) { Alignment = TextFlag.Center } ) );
-		center.Add( TaStyle.Muted( new Label( "Open a humanoid model to animate it, or start fresh from a copy of an s&box character.", this )
+		center.Add( TaStyle.Muted( new Label( "Drop a rigged model to animate it, or start fresh from a copy of an s&box character.", this )
 			{ Alignment = TextFlag.Center, WordWrap = true, MaximumWidth = 440 }, small: true ) );
 		center.AddSpacingCell( 4 );
 		var choice = center.AddRow();
