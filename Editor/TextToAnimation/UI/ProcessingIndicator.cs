@@ -8,7 +8,7 @@ namespace TextToAnimation.Editor.UI;
 /// <summary>Stands in the preview's place while a capture runs, at the preview's size: a spinner with "Processing…"
 /// and the current step, or, while models download, a progress bar with the file and how much is left in all.
 /// Styled like the first-load drop box.</summary>
-sealed class ProcessingIndicator : Widget
+public sealed class ProcessingIndicator : Widget
 {
     static readonly Regex Download=new(@"^Downloading (?<name>.+?) · (?<percent>\d+)%(?: · (?<left>.+) left)?$",RegexOptions.CultureInvariant);
     string _status="";string _file;float? _progress;string _left;

@@ -13,7 +13,7 @@ namespace TextToAnimation.Editor.UI;
 /// <summary>Color roles for pills and status lines.</summary>
 public enum Tone { Accent, Amber, Red, Neutral }
 
-internal static class TaStyle
+public static class TaStyle
 {
 	public const float ControlHeight = 24f;
 
@@ -121,7 +121,7 @@ internal static class TaStyle
 }
 
 /// <summary>A rounded dark-gray panel with an optional header row (icon, title, then controls).</summary>
-internal class TaCard : Widget
+public class TaCard : Widget
 {
 	public TaCard( Widget parent ) : base( parent )
 	{
@@ -167,7 +167,7 @@ internal class TaCard : Widget
 }
 
 /// <summary>A rounded tinted label: profile and confidence, ground verdicts, counts.</summary>
-internal sealed class TaPill : Widget
+public sealed class TaPill : Widget
 {
 	string _text = "";
 	Color _color = Theme.TextLight;
@@ -245,7 +245,7 @@ public sealed class TaElidedLabel : Widget
 }
 
 /// <summary>A small round light before the status text: blue while working, blue when fine, red on errors.</summary>
-internal sealed class TaStatusDot : Widget
+public sealed class TaStatusDot : Widget
 {
 	Color _color = Theme.TextLight;
 
@@ -275,7 +275,7 @@ internal sealed class TaStatusDot : Widget
 
 /// <summary>The empty state of the clip list: a prompt and the add button. Accepts animation
 /// files from the OS and from the asset browser.</summary>
-internal sealed class TaDropZone : Widget
+public sealed class TaDropZone : Widget
 {
 	readonly Action<IReadOnlyList<string>> _add;
 	int _hover;
@@ -339,7 +339,7 @@ internal sealed class TaDropZone : Widget
 }
 
 /// <summary>Files dropped from disk or the asset browser, filtered by extension.</summary>
-internal static class TaDrop
+public static class TaDrop
 {
 	public static readonly string[] ModelExtensions = { ".vmdl" };
 	public static readonly string[] AnimationExtensions = { ".fbx", ".bvh", ".glb", ".gltf", ".dmx" };
@@ -377,7 +377,7 @@ internal static class TaDrop
 
 /// <summary>The secondary button (the Weapon Importer's): a fill one step lighter than the card,
 /// a hairline border and a hover lighten.</summary>
-internal sealed class TaButton : Widget
+public sealed class TaButton : Widget
 {
 	string _text;
 	readonly string _icon;
@@ -475,7 +475,7 @@ internal sealed class TaButton : Widget
 }
 
 /// <summary>Small uppercase caption with a hairline, separating groups inside a card.</summary>
-internal sealed class TaSection : Widget
+public sealed class TaSection : Widget
 {
 	readonly string _text;
 
