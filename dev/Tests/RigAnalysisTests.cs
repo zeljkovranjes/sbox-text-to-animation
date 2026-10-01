@@ -41,6 +41,150 @@ public class RigAnalysisTests
         return string.Join("\n", lines);
     }
 
+    public static TheoryData<string> CreatureNames => new() { "bird", "dog", "snake", "dinosaur", "alligator", "dragon" };
+
+    internal static List<Creatures.Spec> SpecOf(string name) => name switch
+    {
+        "bird" => Creatures.Bird(),
+        "dog" => Creatures.Dog(),
+        "snake" => Creatures.Snake(),
+        "dinosaur" => Creatures.Dinosaur(),
+        "alligator" => Creatures.Alligator(),
+        "dragon" => Creatures.Dragon(),
+        _ => throw new ArgumentException(name),
+    };
+
+    /// <summary>The s&amp;box human with every bone renamed to gibberish and the bone order shuffled.</summary>
+    internal static (Skeleton Skeleton, Func<string, string> Rename) RenamedHuman(int seed = 99)
+    {
+        var human = Fixtures.HumanEngine();
+        var rename = Creatures.Gibberish(human.Bones.Select(b => b.Name));
+        var defs = human.Bones.Select(b => new BoneDefinition(rename(b.Name), b.ParentIndex < 0 ? null : rename(human[b.ParentIndex].Name), b.RestLocal)).ToList();
+        var rng = new Random(seed);
+        return (Skeleton.Create(defs.OrderBy(_ => rng.Next()).ToList()), rename);
+    }
+
+    /// <summary>Asserts two analyses of the same rig (one renamed/reordered) agree bone for bone.</summary>
+    static void AssertSameAnatomy(RigAnalysis a, RigAnalysis b, Func<string, string> rename, bool namesUsed)
+    {
+        var sa = a.Skeleton; var sb = b.Skeleton;
+        int Map(int i) => i < 0 ? -1 : sb.IndexOf(rename(sa[i].Name));
+        Assert.True(Vector3.Distance(a.Forward, b.Forward) < 1e-4f, $"forward {a.Forward} vs {b.Forward}");
+        Assert.Equal(Map(a.BodyRoot), b.BodyRoot);
+        Assert.Equal(Map(a.Head), b.Head);
+        Assert.Equal(a.Facing, b.Facing);
+        Assert.Equal(Map(a.FacingRight), b.FacingRight);
+        Assert.Equal(Map(a.FacingLeft), b.FacingLeft);
+        Assert.Equal(a.IsHumanoid, b.IsHumanoid);
+        for (var i = 0; i < sa.Count; i++)
+        {
+            var j = Map(i);
+            Assert.True(a.InBody[i] == b.InBody[j], $"{sa[i].Name}: in body {a.InBody[i]} vs {b.InBody[j]}");
+            Assert.Equal(a.Side[i], b.Side[j]);
+            Assert.Equal(a.Part[i], b.Part[j]);
+            Assert.Equal(Map(a.Mirror[i]), b.Mirror[j]);
+            if (a.Part[i] != RigPart.Other || !namesUsed) Assert.True(a.Label[i] == b.Label[j], $"{sa[i].Name}: '{a.Label[i]}' vs '{b.Label[j]}'");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(CreatureNames))]
+    public void CreatureAnatomyDoesNotDependOnNamesOrBoneOrder(string creature)
+    {
+        var spec = SpecOf(creature);
+        var named = RigAnalysis.Analyze(Creatures.Build(spec));
+        var rename = Creatures.Gibberish(spec.Select(x => x.Name));
+        var renamed = RigAnalysis.Analyze(Creatures.Build(spec, rename, shuffleSeed: 77));
+        _out.WriteLine(Dump(named));
+        AssertSameAnatomy(named, renamed, rename, namesUsed: true);
+        // every body bone is explained by the shape
+        Assert.DoesNotContain(Enumerable.Range(0, named.Skeleton.Count), b => named.InBody[b] && named.Part[b] == RigPart.Other);
+    }
+
+    [Fact]
+    public void HumanAnatomyDoesNotDependOnNamesOrBoneOrder()
+    {
+        var named = RigAnalysis.Analyze(Fixtures.HumanEngine());
+        var (skeleton, rename) = RenamedHuman();
+        var renamed = RigAnalysis.Analyze(skeleton);
+        AssertSameAnatomy(named, renamed, rename, namesUsed: false);
+        Assert.True(renamed.IsHumanoid);
+    }
+
+    [Fact]
+    public void ReadsABird()
+    {
+        var a = RigAnalysis.Analyze(Creatures.Build(Creatures.Bird()));
+        var s = a.Skeleton;
+        string L(string bone) => a.Label[s.IndexOf(bone)];
+        Assert.False(a.IsHumanoid);
+        Assert.Equal("pelvis", s[a.BodyRoot].Name);
+        Assert.Equal("head", s[a.Head].Name);
+        Assert.True(Vector3.Dot(a.Forward, Vector3.UnitX) > 0.99f);
+        Assert.Equal("Left Thigh", L("thigh_L"));
+        Assert.Equal("Right Foot", L("tarsus_R"));
+        Assert.Equal("Left Toe", L("toe_a_L"));
+        Assert.Equal("Right Wing", L("wing_3_R"));
+        Assert.Equal("Tail", L("tail_2"));
+        Assert.Equal("Neck", L("neck_2"));
+        Assert.Equal("Jaw", L("beak"));
+        Assert.Equal(("thigh_R", "thigh_L"), (s[a.FacingRight].Name, s[a.FacingLeft].Name));
+    }
+
+    [Fact]
+    public void ReadsADog()
+    {
+        var a = RigAnalysis.Analyze(Creatures.Build(Creatures.Dog()));
+        var s = a.Skeleton;
+        string L(string bone) => a.Label[s.IndexOf(bone)];
+        Assert.False(a.IsHumanoid);
+        Assert.Equal("pelvis", s[a.BodyRoot].Name);
+        Assert.Equal("head", s[a.Head].Name);
+        Assert.Equal("Left Thigh", L("hip_L"));
+        Assert.Equal("Right Shin", L("knee_R"));
+        Assert.Equal("Left Fetlock", L("hock_L"));
+        Assert.Equal("Right Foot", L("paw_R"));
+        Assert.Equal("Left Upper Arm", L("scapula_L"));
+        Assert.Equal("Left Forearm", L("elbow_L"));
+        Assert.Equal("Right Finger", L("ftoe_R"));
+        Assert.Equal("Tail", L("tail_3"));
+        Assert.Equal("Left Ear", L("ear_L"));
+        Assert.Equal(4, a.Limbs.Count(l => l.Kind is LimbKind.Leg or LimbKind.FrontLeg));
+        Assert.Equal(("hip_R", "hip_L"), (s[a.FacingRight].Name, s[a.FacingLeft].Name));
+    }
+
+    [Fact]
+    public void ReadsASnakeAlongItsBody()
+    {
+        var a = RigAnalysis.Analyze(Creatures.Build(Creatures.Snake()));
+        var s = a.Skeleton;
+        Assert.False(a.Symmetric);
+        Assert.Equal(RigFacing.BodyAxis, a.Facing);
+        Assert.True(Vector3.Dot(a.Forward, Vector3.UnitX) > 0.99f, $"forward {a.Forward}");
+        Assert.Equal("jaw", s[a.FacingRight].Name);
+        Assert.Equal("root", s[a.FacingLeft].Name);
+        Assert.Equal("Spine", a.Label[s.IndexOf("seg_10")]);
+    }
+
+    [Fact]
+    public void ReadsADinosaurAndAnAlligator()
+    {
+        var dino = RigAnalysis.Analyze(Creatures.Build(Creatures.Dinosaur()));
+        var ds = dino.Skeleton;
+        Assert.False(dino.IsHumanoid);
+        Assert.Equal("Left Upper Arm", dino.Label[ds.IndexOf("arm_L")]);
+        Assert.Equal("Right Hand", dino.Label[ds.IndexOf("hand_R")]);
+        Assert.Equal("Tail", dino.Label[ds.IndexOf("tail_4")]);
+        Assert.Equal("Left Toe", dino.Label[ds.IndexOf("toe_L")]);
+
+        var gator = RigAnalysis.Analyze(Creatures.Build(Creatures.Alligator()));
+        var gs = gator.Skeleton;
+        Assert.Equal("Left Thigh", gator.Label[gs.IndexOf("hip_L")]);
+        Assert.Equal("Right Upper Arm", gator.Label[gs.IndexOf("shoulder_R")]);
+        Assert.Equal("Tail", gator.Label[gs.IndexOf("tail_5")]);
+        Assert.Equal("head", gs[gator.Head].Name);
+    }
+
     [Fact]
     public void ReadsTheSboxHuman()
     {

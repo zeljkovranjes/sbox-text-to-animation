@@ -251,8 +251,10 @@ public sealed class RigAnalysis
                 var rel = _p[b] - _p[parent];
                 var t = Vector3.Dot(rel, seg) / (segLen * segLen);
                 var off = (rel - seg * t).Length();
-                // only leaves that don't stick out: a toe, thumb or tail spike leaves the line
-                if (t > -0.15f && t < 1.05f && off < MathF.Max(0.15f * segLen, 0.01f * Size) && offset < 1.05f * segLen)
+                // twist bones sit on the bone's axis, elbow/knee helpers at the joint; a toe, thumb, jaw or spike sticks out
+                var onAxis = t > -0.15f && t < 1.05f && off < MathF.Max(0.06f * segLen, 0.004f * Size) && offset < 1.05f * segLen;
+                var atJoint = offset < 0.12f * segLen;
+                if (onAxis || atJoint)
                 {
                     InBody[b] = false;
                     changed = true;
@@ -527,7 +529,9 @@ public sealed class RigAnalysis
         }
         var paths = starts.Select(CentralPath).ToList();
         if (paths.Count == 0) return;
-        var spine = paths.OrderByDescending(p => BodySubtree(p[0]).Count()).ThenBy(p => p[0]).First();
+        // the spine carries the limbs (arms, wings, front legs, the head's ears); a tail, however long, carries none
+        int LimbsBelow(int start) => BodySubtree(start).Count(b => !IsCentral(b) && Skeleton[b].ParentIndex >= 0 && IsCentral(Skeleton[b].ParentIndex));
+        var spine = paths.OrderByDescending(p => LimbsBelow(p[0])).ThenByDescending(p => BodySubtree(p[0]).Count()).ThenBy(p => p[0]).First();
         SpineChain.AddRange(spine);
         foreach (var p in paths)
         {
@@ -601,6 +605,7 @@ public sealed class RigAnalysis
         foreach (var limb in Limbs)
             if (spineIndex.TryGetValue(limb.Attach, out var at) && limb.Length + Reach(limb.Chain[^1]) > 0.15f * Height)
                 chest = Math.Max(chest, at);
+        _chest = chest >= 0 ? SpineChain[chest] : -1;
         var head = -1;
         if (!Symmetric)
         {
@@ -621,12 +626,23 @@ public sealed class RigAnalysis
         }
         else
         {
+            // the head: the first bone past the chest where the centre line branches (jaw, ears, eyes); or the
+            // end of the line, unless that end turns sharply away from the neck (a beak, snout or jaw)
             for (var i = chest + 1; i < SpineChain.Count; i++)
             {
                 var b = SpineChain[i];
                 var kids = BodyChildren(b).ToList();
-                var pairedBelow = BodySubtree(b).Any(x => x != b && !IsCentral(x));
-                if (kids.Count != 1 || pairedBelow || i == SpineChain.Count - 1) { head = i; break; }
+                if (kids.Count >= 2 || kids.Any(k => !IsCentral(k))) { head = i; break; }
+                if (i < SpineChain.Count - 1) continue;
+                head = i;
+                if (i - 2 >= 0 && i - 1 > chest)
+                {
+                    var neck = _p[SpineChain[i - 1]] - _p[SpineChain[i - 2]];
+                    var tip = _p[b] - _p[SpineChain[i - 1]];
+                    if (neck.Length() > 1e-6f && tip.Length() > 1e-6f
+                        && Vector3.Dot(Vector3.Normalize(neck), Vector3.Normalize(tip)) < MathF.Cos(35f * MathF.PI / 180f))
+                        head = i - 1;
+                }
             }
         }
         if (head >= 0) Head = SpineChain[head];
@@ -680,7 +696,20 @@ public sealed class RigAnalysis
 
     bool InHeadCluster(int bone) => Head >= 0 && (bone == Head || IsAncestor(Head, bone));
 
-    bool Upright => Head >= 0 && (_p[Head].Z - _p[BodyRoot].Z) > 0.6f * (_p[Head] - _p[BodyRoot]).Length() && (_p[Head].Z - _p[BodyRoot].Z) > 0.2f * Height;
+    int _chest = -1;
+
+    /// <summary>An upright body: the spine rises from the hips to the chest (or head), as for a person; birds,
+    /// quadrupeds and dinosaurs carry it level.</summary>
+    bool Upright
+    {
+        get
+        {
+            var top = _chest >= 0 ? _chest : Head;
+            if (top < 0) return false;
+            var v = _p[top] - _p[BodyRoot];
+            return v.Z > 0.7f * v.Length() && v.Z > 0.15f * Height;
+        }
+    }
 
     void ClassifyLimbs()
     {
@@ -723,10 +752,10 @@ public sealed class RigAnalysis
         switch (limb.Kind)
         {
             case LimbKind.Leg:
-                names = Segments(k, "Hip", new[] { "Thigh", "Shin", "Foot", "Toe" });
+                names = LimbSegments(limb, "Hip", "Fetlock", new[] { "Thigh", "Shin", "Foot", "Toe" });
                 digit = "Toe"; part = RigPart.Leg; break;
             case LimbKind.FrontLeg:
-                names = Segments(k, "Shoulder", new[] { "Upper Arm", "Forearm", "Hand", "Finger" });
+                names = LimbSegments(limb, "Shoulder", "Metacarpus", new[] { "Upper Arm", "Forearm", "Hand", "Finger" });
                 digit = "Finger"; part = RigPart.FrontLeg; break;
             case LimbKind.Arm:
                 names = k >= 4
@@ -760,11 +789,25 @@ public sealed class RigAnalysis
         }
     }
 
-    /// <summary>Labels for a chain of <paramref name="k"/> bones: extra leading bones get <paramref name="extra"/>.</summary>
-    static string[] Segments(int k, string extra, string[] four)
+    /// <summary>
+    /// Labels for a leg chain: upper, middle, end, digit. A leg with more than four bones either starts with a short
+    /// girdle bone (<paramref name="girdle"/>: a hip or shoulder blade) or has extra bones in the lower leg
+    /// (<paramref name="middle"/>: the fetlock of a hoofed or digitigrade leg).
+    /// </summary>
+    string[] LimbSegments(RigLimb limb, string girdle, string middle, string[] four)
     {
-        if (k >= 4) return Enumerable.Repeat(extra, k - 4).Concat(four).ToArray();
-        return four.Take(k).ToArray();
+        var c = limb.Chain;
+        var k = c.Count;
+        if (k <= 4) return four.Take(k).ToArray();
+        float Seg(int i) => (_p[c[i + 1]] - _p[c[i]]).Length();
+        var girdles = 0;
+        while (k - girdles > 4 && Seg(girdles) < 0.6f * Seg(girdles + 1)) girdles++;
+        var extra = k - girdles - 4;
+        return Enumerable.Repeat(girdle, girdles)
+            .Concat(four.Take(2))
+            .Concat(Enumerable.Repeat(middle, extra))
+            .Concat(four.Skip(2))
+            .ToArray();
     }
 
     bool DetectHumanoid()

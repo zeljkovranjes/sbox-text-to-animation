@@ -140,7 +140,8 @@ public sealed class UniMateRig
 		if ( total > MaxJoints )
 			throw new InvalidOperationException( $"This skeleton has too many bones for UniMate ({total} joints after simplifying, at most {MaxJoints})." );
 
-		// breadth-first from the hips, children in skeleton order
+		// breadth-first from the hips; siblings in a geometric order (centre, left, right; bigger first; front first)
+		// so the joint order doesn't depend on the bone order or names
 		var bones = new List<int>();
 		var queue = new Queue<int>();
 		queue.Enqueue( a.BodyRoot );
@@ -148,7 +149,14 @@ public sealed class UniMateRig
 		{
 			var b = queue.Dequeue();
 			bones.Add( b );
-			foreach ( var c in Below( s, selected, b ) ) queue.Enqueue( c );
+			var kids = Below( s, selected, b ).ToList();
+			foreach ( var c in kids
+				.OrderBy( c => (int)a.Side[c] )
+				.ThenByDescending( c => a.BodySubtree( c ).Count( selected.Contains ) )
+				.ThenByDescending( c => Vector3.Dot( rest[c].Pos, a.Forward ) )
+				.ThenByDescending( c => rest[c].Pos.Z )
+				.ThenByDescending( c => Vector3.Dot( rest[c].Pos, a.Left ) ) )
+				queue.Enqueue( c );
 		}
 		if ( bones.Count < 3 ) throw new InvalidOperationException( $"UniMate needs a skeleton with at least 3 connected bones; this one has {bones.Count}." );
 		var j = new JointList( rig, bones );
