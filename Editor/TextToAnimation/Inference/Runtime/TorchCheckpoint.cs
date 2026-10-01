@@ -14,9 +14,9 @@ namespace TextToAnimation.Editor.Inference.Runtime;
 public sealed partial class TorchCheckpoint : IDisposable
 {
     public sealed record TensorInfo(string Name,string Storage,string Dtype,long StorageLength,long Offset,int[] Shape,long[] Stride);
-    sealed record Symbol(string Module,string Name);
-    sealed record StorageRef(string Key,string Dtype,long Count);
-    sealed record TensorRef(StorageRef Storage,long Offset,int[] Shape,long[] Stride);
+    internal sealed record Symbol(string Module,string Name);
+    internal sealed record StorageRef(string Key,string Dtype,long Count);
+    internal sealed record TensorRef(StorageRef Storage,long Offset,int[] Shape,long[] Stride);
     readonly ZipArchive archive;
     readonly string prefix;
     readonly Dictionary<string,TensorInfo> tensors=new(StringComparer.Ordinal);
@@ -110,7 +110,7 @@ public sealed partial class TorchCheckpoint : IDisposable
     }
     public void Dispose()=>archive.Dispose();
 
-    sealed class DataReader
+    internal sealed class DataReader
     {
         readonly BinaryReader reader;
         readonly List<object?> stack=new();
