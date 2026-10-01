@@ -509,65 +509,6 @@ public static class EditorGate
 		new( "octopus", new[] { "wave its tentacles", "crawl forward" }, 0.687f ),
 	};
 
-	/// <summary>The vmdl a user would make for a rigged FBX (centimetres, like the Citizen sources).</summary>
-	static string CreatureVmdl( string fbxAssetPath ) => $$"""
-<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:modeldoc30:version{8c2d7a91-9c42-4bf0-883a-5a3b1762d4f1} -->
-{
-	rootNode =
-	{
-		_class = "RootNode"
-		children =
-		[
-			{
-				_class = "ModelModifierList"
-				children =
-				[
-					{
-						_class = "ModelModifier_ScaleAndMirror"
-						scale = 0.3937
-						mirror_x = false
-						mirror_y = false
-						mirror_z = false
-						flip_bone_forward = false
-						swap_left_and_right_bones = false
-					},
-				]
-			},
-			{
-				_class = "RenderMeshList"
-				children =
-				[
-					{
-						_class = "RenderMeshFile"
-						filename = "{{fbxAssetPath}}"
-						import_translation = [ 0.0, 0.0, 0.0 ]
-						import_rotation = [ 0.0, 0.0, 0.0 ]
-						import_scale = 1.0
-						align_origin_x_type = "None"
-						align_origin_y_type = "None"
-						align_origin_z_type = "None"
-						parent_bone = ""
-						import_filter =
-						{
-							exclude_by_default = false
-							exception_list = [  ]
-						}
-					},
-				]
-			},
-			{
-				_class = "AnimationList"
-				children = [  ]
-			},
-		]
-		model_archetype = ""
-		primary_associated_entity = ""
-		anim_graph_name = ""
-		base_model_name = ""
-	}
-}
-""";
-
 	/// <summary>
 	/// For each creature FBX (T2A_GATE_CREATURES folder): make a vmdl, compile it, check its size, open it, generate
 	/// two animations, save both (appended, the model's own nodes untouched, engine playback verified) and render
@@ -583,16 +524,20 @@ public static class EditorGate
 		{
 			var fbx = Path.Combine( source, creature.Name, creature.Name + ".fbx" );
 			if ( !File.Exists( fbx ) ) { check( $"{creature.Name}: FBX present", false, fbx ); continue; }
-			var folder = Path.Combine( assets, "t2a_creatures", creature.Name );
-			Directory.CreateDirectory( folder );
-			File.Copy( fbx, Path.Combine( folder, creature.Name + ".fbx" ), true );
-			var vmdlPath = Path.Combine( folder, creature.Name + ".vmdl" );
-			var vmdl = CreatureVmdl( $"t2a_creatures/{creature.Name}/{creature.Name}.fbx" );
-			File.WriteAllText( vmdlPath, vmdl );
-			var compile = await VmdlCompiler.RegisterAndCompileAsync( vmdlPath, new[] { Path.Combine( folder, creature.Name + ".fbx" ) } );
+			// the user's path: drop a rigged FBX -> textures, materials, vmdl, compile
+			var compile = await StarterModels.ImportFbxAsync( fbx );
 			await EngineThread.SwitchToMainThread();
+			var vmdlPath = compile.Asset?.AbsolutePath ?? "";
+			var folder = Path.GetDirectoryName( vmdlPath ) ?? "";
 			check( $"{creature.Name}: vmdl from FBX compiles", compile.Compiled, compile.Error ?? "" );
 			if ( !compile.Compiled ) continue;
+			var vmats = Directory.GetFiles( folder, "*.vmat" );
+			var textured = vmats.Count( v => File.ReadAllLines( v ).Any( l => l.Contains( "TextureColor" ) && !l.Contains( "materials/default" ) ) );
+			var tinted = vmats.Count( v => File.ReadAllLines( v ).Any( l => l.Contains( "g_vColorTint" ) ) );
+			var hasImages = Directory.GetFiles( folder, "*.png", SearchOption.AllDirectories ).Concat( Directory.GetFiles( folder, "*.jpg", SearchOption.AllDirectories ) ).Any();
+			// every material shows the model's look: an image, or the colour its material authors
+			check( $"{creature.Name}: textures found and materials generated", vmats.Length > 0 && textured + tinted >= vmats.Length && (hasImages ? textured > 0 : tinted == vmats.Length),
+				$"{textured} textured, {tinted} colour-only, {vmats.Length} materials" );
 
 			var error = await window.OpenModelAsync( compile.Asset );
 			await EngineThread.SwitchToMainThread();
@@ -616,6 +561,7 @@ public static class EditorGate
 			// the compiled model as modeldoc shows it: bind pose, no animation
 			session.SelectClip( null );
 			window.Viewport.FrameCharacter();
+			window.Viewport.SetView( 35f, 12f );
 			await EngineThread.DelayOnMain( 600 );
 			File.WriteAllBytes( Path.Combine( shots, $"creature_{creature.Name}_bind.png" ), window.Viewport.RenderToPng() );
 
@@ -652,7 +598,7 @@ public static class EditorGate
 			var text = File.ReadAllText( vmdlPath );
 			var names = made.Select( c => c.EffectiveSequenceName ).ToList();
 			var appended = names.All( n => session.Model.AnimationNames.Contains( n ) ) && Kv3Sequences( vmdlPath ).Count( n => names.Contains( n ) ) == names.Count;
-			var untouched = text.Contains( $"t2a_creatures/{creature.Name}/{creature.Name}.fbx" ) && text.Contains( "scale = 0.3937" );
+			var untouched = text.Contains( ".fbx\"" ) && text.Contains( "ModelModifier_ScaleAndMirror" ) && text.Contains( "MaterialGroupList" );
 			check( $"{creature.Name}: animations appended, model nodes untouched", appended && untouched, $"{string.Join( ",", session.Model.AnimationNames.Take( 6 ) )}" );
 
 			// the compiled animation as the engine plays it (sampled back from the model) for review
@@ -660,7 +606,9 @@ public static class EditorGate
 			await EngineThread.SwitchToMainThread();
 			session.SelectClip( played );
 			window.Viewport.FrameCharacter();
-			foreach ( var f in new[] { 0, played.FrameCount / 2, played.FrameCount - 1 } )
+			window.Viewport.SetView( 90f, 8f ); // side on: gaits read best from the side
+			window.Viewport.FollowCharacter = true;
+			foreach ( var f in Enumerable.Range( 0, 6 ).Select( k => k * (played.FrameCount - 1) / 5 ) )
 			{
 				session.Playing = false;
 				session.Seek( f );

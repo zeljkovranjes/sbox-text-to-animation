@@ -31,7 +31,7 @@ public sealed class StartPage : Widget
 		center.Spacing = 12;
 		center.Add( new BigIcon( this ) );
 		center.Add( new Label.Subtitle( "Drop a model", this ) { Alignment = TextFlag.Center } );
-		center.Add( TaStyle.Muted( new Label( "VMDL", this ) { Alignment = TextFlag.Center } ) );
+		center.Add( TaStyle.Muted( new Label( "VMDL or rigged FBX", this ) { Alignment = TextFlag.Center } ) );
 		center.Add( TaStyle.Muted( new Label( "Drop a rigged model to animate it, or start fresh from a copy of an s&box character.", this )
 			{ Alignment = TextFlag.Center, WordWrap = true, MaximumWidth = 440 }, small: true ) );
 		center.AddSpacingCell( 4 );
@@ -39,7 +39,7 @@ public sealed class StartPage : Widget
 		choice.Spacing = 8;
 		choice.AddStretchCell();
 		choice.Add( new Button.Primary( "Choose VMDL" ) { Icon = "folder_open", Tint = TaStyle.Accent, MinimumWidth = 140, FixedHeight = 32, Clicked = chooseFile, ToolTip = "Pick a model from the asset browser" } );
-		choice.Add( new TaButton( this, "From disk…", "file_open", chooseFromDisk, "Pick a .vmdl outside the project (it is copied into the project)", 32 ) );
+		choice.Add( new TaButton( this, "From disk…", "file_open", chooseFromDisk, "Pick a .vmdl or a rigged .fbx (copied into the project; an FBX gets its textures, materials and a vmdl)", 32 ) );
 		choice.AddStretchCell();
 		var fresh = center.AddRow();
 		fresh.Spacing = 8;

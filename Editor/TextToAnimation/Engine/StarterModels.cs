@@ -74,6 +74,51 @@ public static class StarterModels
 	}
 
 	/// <summary>
+	/// Makes a model from a rigged FBX: the FBX goes to Assets/models/&lt;name&gt;/ with its textures (sidecar
+	/// files, a textures folder, or images embedded in the FBX), a .vmat is generated per material, and a .vmdl
+	/// is written that keeps every bone (unweighted helpers too), scales the file's units to s&amp;box inches and
+	/// remaps the materials - then it is compiled.
+	/// </summary>
+	public static Task<VmdlCompiler.CompileResult> ImportFbxAsync( string fbxPath )
+	{
+		if ( AssetsRoot is null ) throw new InvalidOperationException( "Open a project first." );
+		var bytes = File.ReadAllBytes( fbxPath );
+		var name = Path.GetFileNameWithoutExtension( fbxPath );
+		var vmdlPath = DefaultTarget( name );
+		var folder = Path.GetDirectoryName( vmdlPath )!;
+		Directory.CreateDirectory( folder );
+		var fbxDest = Path.Combine( folder, Path.GetFileNameWithoutExtension( vmdlPath ) + ".fbx" );
+		File.Copy( fbxPath, fbxDest, true );
+
+		// textures first: generated materials reference them, and the mesh compile bakes material references in
+		FbxMaterials.CopySidecarTextures( Path.GetDirectoryName( fbxPath ), folder,
+			FbxMaterials.ExtractFbxMaterials( bytes ).SelectMany( m => m.TextureReferences ) );
+		FbxMaterials.ExtractEmbeddedTextures( bytes, folder );
+		var remaps = FbxMaterials.GenerateMissingVmats( fbxDest );
+
+		var relative = Path.GetRelativePath( AssetsRoot, fbxDest ).Replace( '\\', '/' );
+		var scale = 0.3937f * FbxUnitScaleCm( bytes );
+		var text = Vmdl.VmdlWriter.GenerateStandalone( "", Array.Empty<Vmdl.AnimEntry>(), scale, "",
+			meshFilePath: relative, materialRemaps: remaps );
+		File.WriteAllText( vmdlPath, text );
+		return VmdlCompiler.RegisterAndCompileAsync( vmdlPath, new[] { fbxDest } );
+	}
+
+	/// <summary>Centimetres per FBX unit (GlobalSettings UnitScaleFactor; 1 = cm, 100 = m). 1 when absent.</summary>
+	public static float FbxUnitScaleCm( byte[] fbx )
+	{
+		try
+		{
+			var props = Formats.Fbx.FbxTokenizer.Parse( fbx ).Child( "GlobalSettings" )?.Child( "Properties70" );
+			var p = props?.ChildrenNamed( "P" ).FirstOrDefault( n => n.Properties.FirstOrDefault() as string == "UnitScaleFactor" );
+			if ( p is not null && p.Properties.Count >= 5 && Convert.ToSingle( p.Properties[4], System.Globalization.CultureInfo.InvariantCulture ) is var v && v > 0 && float.IsFinite( v ) )
+				return v;
+		}
+		catch { }
+		return 1f;
+	}
+
+	/// <summary>
 	/// Brings a .vmdl from outside the project in: it is copied to Assets/models/&lt;name&gt;/ and compiled. Its
 	/// references (meshes, materials, animations) must resolve from the project, like any model.
 	/// </summary>

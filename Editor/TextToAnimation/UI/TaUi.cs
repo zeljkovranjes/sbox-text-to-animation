@@ -341,7 +341,7 @@ public sealed class TaDropZone : Widget
 /// <summary>Files dropped from disk or the asset browser, filtered by extension.</summary>
 public static class TaDrop
 {
-	public static readonly string[] ModelExtensions = { ".vmdl" };
+	public static readonly string[] ModelExtensions = { ".vmdl", ".fbx" };
 	public static readonly string[] AnimationExtensions = { ".fbx", ".bvh", ".glb", ".gltf", ".dmx" };
 
 	public static IReadOnlyList<string> Paths( DragData data, string[] extensions )

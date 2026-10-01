@@ -323,6 +323,11 @@ public sealed class TextToAnimationWindow : Widget
 
 	async Task OpenModelPathAsync( string path )
 	{
+		if ( path.EndsWith( ".fbx", StringComparison.OrdinalIgnoreCase ) )
+		{
+			await RunStartingAsync( $"Making a model from {Path.GetFileName( path )} (textures, materials, vmdl)", () => StarterModels.ImportFbxAsync( path ) );
+			return;
+		}
 		if ( AssetSystem.FindByPath( path ) is { } asset ) { await OpenModelAsync( asset ); return; }
 		await RunStartingAsync( $"Copying {Path.GetFileName( path )} into the project", () => StarterModels.CopyIntoProjectAsync( path ) );
 	}
@@ -330,7 +335,7 @@ public sealed class TextToAnimationWindow : Widget
 	/// <summary>Picks a .vmdl anywhere on disk; files outside the project are copied in first.</summary>
 	void ChooseFromDisk()
 	{
-		var path = EditorUtility.OpenFileDialog( "Open model", "Models (*.vmdl)", null );
+		var path = EditorUtility.OpenFileDialog( "Open model", "Models (*.vmdl *.fbx)", null );
 		if ( !string.IsNullOrEmpty( path ) ) _ = OpenModelPathAsync( path );
 	}
 

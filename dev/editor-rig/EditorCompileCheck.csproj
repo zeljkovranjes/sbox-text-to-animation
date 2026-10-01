@@ -33,6 +33,7 @@
     <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Tools.dll" />
     <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Compiling.dll" />
     <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Bind.dll" />
+    <Reference Include="$(SboxRoot)\bin\managed\SkiaSharp.dll" />
     <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Event.dll" />
     <Reference Include="$(SboxRoot)\bin\managed\Facepunch.ActionGraphs.dll" />
     <Reference Include="$(SboxRoot)\bin\managed\Microsoft.AspNetCore.Components.dll" />

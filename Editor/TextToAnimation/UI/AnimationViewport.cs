@@ -85,9 +85,20 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	public void FrameCharacter()
 	{
 		var rig = _session.Rig;
-		var height = rig is null ? 72f : MathF.Max( rig.HipHeight * 2.1f, 20f );
-		_distance = height * 1.9f;
-		_target = new Vector3( 0, 0, height * 0.5f );
+		if ( _model is not null && !_model.IsError && _model.Bounds.Size.Length > 1f )
+		{
+			// any creature: frame its whole body (a fox is long and low, a person tall and narrow)
+			var size = _model.Bounds.Size;
+			var extent = MathF.Max( size.z, MathF.Max( size.x, size.y ) * 0.75f );
+			_distance = MathF.Max( extent * 1.9f, 30f );
+			_target = new Vector3( 0, 0, size.z * 0.5f );
+		}
+		else
+		{
+			var height = rig is null ? 72f : MathF.Max( rig.HipHeight * 2.1f, 20f );
+			_distance = height * 1.9f;
+			_target = new Vector3( 0, 0, height * 0.5f );
+		}
 		_pan = Vector3.Zero;
 		_followCenter = null;
 	}
