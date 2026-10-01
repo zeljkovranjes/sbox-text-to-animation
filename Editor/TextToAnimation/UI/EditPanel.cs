@@ -57,13 +57,11 @@ public sealed class EditPanel : Widget
 
 		// ---- root motion
 		var rootCard = Layout.Add( new TaFold( this, "route", "Root motion", open: false, key: "edit.rootCard" ) );
-		var rootRow = rootCard.Content.AddRow();
-		rootRow.Spacing = 4;
-		rootRow.Add( new TaButton( rootCard, "In place", "my_location", () => _session.Edit( "Make in place", c => ClipOps.MakeInPlace( c, _session.Rig ) ), "Remove travel: the character stays on the spot" ), 1 );
-		rootRow.Add( new TaButton( rootCard, "Remove drift", "near_me_disabled", () => _session.Edit( "Remove root drift", c => ClipOps.RemoveRootDrift( c, _session.Rig ) ), "End where it started, facing the same way (idles, loops)" ), 1 );
-		rootRow = rootCard.Content.AddRow();
-		rootRow.Spacing = 4;
-		rootRow.Add( new TaButton( rootCard, "Reset start", "restart_alt", () => _session.Edit( "Reset start", c => ClipOps.ResetStart( c, _session.Rig ) ), "Start at the model's origin facing forward" ), 1 );
+		Actions( rootCard,
+			new TaButton( rootCard, "In place", "my_location", () => _session.Edit( "Make in place", c => ClipOps.MakeInPlace( c, _session.Rig ) ), "Remove travel: the character stays on the spot" ),
+			new TaButton( rootCard, "Remove drift", "near_me_disabled", () => _session.Edit( "Remove root drift", c => ClipOps.RemoveRootDrift( c, _session.Rig ) ), "End where it started, facing the same way (idles, loops)" ) );
+		Actions( rootCard,
+			new TaButton( rootCard, "Reset start", "restart_alt", () => _session.Edit( "Reset start", c => ClipOps.ResetStart( c, _session.Rig ) ), "Start at the model's origin facing forward" ) );
 		var offRow = rootCard.Content.AddRow();
 		offRow.Spacing = 4;
 		offRow.Add( TaStyle.Muted( new Label( "Move", rootCard ) { FixedWidth = 40 } ) );
@@ -82,21 +80,20 @@ public sealed class EditPanel : Widget
 		_blend = blendRow.Add( new FloatSlider( loopCard ) { Minimum = 0.05f, Maximum = 1f, Value = 0.25f }, 1 );
 		_blendLabel = blendRow.Add( TaStyle.Muted( new Label( "0.25 s", loopCard ) { FixedWidth = 44 } ) );
 		_blend.OnValueEdited = () => _blendLabel.Text = $"{_blend.Value:0.00} s";
-		loopCard.Content.Add( new TaButton( loopCard, "Make seamless loop", "all_inclusive", () =>
+		Actions( loopCard, new TaButton( loopCard, "Make seamless loop", "all_inclusive", () =>
 		{
 			var clip = _session.ActiveClip;
 			if ( clip is null ) return;
 			var frames = Math.Clamp( (int)MathF.Round( _blend.Value * clip.Fps ), 1, Math.Max( 1, clip.FrameCount - 2 ) );
 			_session.Edit( "Make seamless loop", c => ClipOps.MakeSeamlessLoop( c, _session.Rig, frames ) );
-		}, "Blend the end into the start so the loop doesn't pop (travel is kept)", 28 ) );
+		}, "Blend the end into the start so the loop doesn't pop (travel is kept)" ) );
 
 		// ---- clean up
 		var cleanCard = Layout.Add( new TaFold( this, "cleaning_services", "Clean up", open: false, key: "edit.cleanCard" ) );
-		var cleanRow = cleanCard.Content.AddRow();
-		cleanRow.Spacing = 4;
-		cleanRow.Add( new TaButton( cleanCard, "Fix foot sliding", "do_not_step", () => _session.Edit( "Fix foot sliding", c => ClipCleanup.CleanFootSliding( c, _session.Rig ) ), "Lock planted feet to the floor" ) );
-		cleanRow.Add( new TaButton( cleanCard, "Ground feet", "vertical_align_bottom", () => _session.Edit( "Ground feet", c => ClipCleanup.GroundFeet( c, _session.Rig ) ), "Move the clip so the feet touch the floor" ) );
-		cleanCard.Content.Add( new TaButton( cleanCard, "Detect footsteps", "directions_walk", () => _session.Edit( "Detect footsteps", c =>
+		Actions( cleanCard,
+			new TaButton( cleanCard, "Fix foot sliding", "do_not_step", () => _session.Edit( "Fix foot sliding", c => ClipCleanup.CleanFootSliding( c, _session.Rig ) ), "Lock planted feet to the floor" ),
+			new TaButton( cleanCard, "Ground feet", "vertical_align_bottom", () => _session.Edit( "Ground feet", c => ClipCleanup.GroundFeet( c, _session.Rig ) ), "Move the clip so the feet touch the floor" ) );
+		Actions( cleanCard, new TaButton( cleanCard, "Detect footsteps", "directions_walk", () => _session.Edit( "Detect footsteps", c =>
 		{
 			var n = ClipCleanup.GenerateFootsteps( c, _session.Rig );
 			_session.SetStatus( n == 0 ? "No footsteps found." : $"{n} footstep events added." );
@@ -111,6 +108,18 @@ public sealed class EditPanel : Widget
 		Layout.AddStretchCell();
 		_session.Changed += c => { if ( (c & (SessionChange.ActiveClip | SessionChange.ClipData | SessionChange.Selection | SessionChange.Model | SessionChange.Busy)) != 0 ) Refresh(); };
 		Refresh();
+	}
+
+	/// <summary>A row of equal-width action buttons spanning the card (one button spans it alone).</summary>
+	static void Actions( TaFold card, params TaButton[] buttons )
+	{
+		var row = card.Content.AddRow();
+		row.Spacing = 6;
+		foreach ( var button in buttons )
+		{
+			button.Fill = true;
+			row.Add( button, 1 );
+		}
 	}
 
 	void ApplyOffset()
@@ -129,7 +138,14 @@ public sealed class EditPanel : Widget
 	{
 		var clip = _session.ActiveClip;
 		Enabled = clip is not null && !_session.Busy;
-		if ( clip is null ) { _info.Text = "No animation open."; ClearIssues(); return; }
+		if ( clip is null )
+		{
+			if ( !_name.IsFocused ) _name.Text = "";
+			_info.Text = "No animation open.";
+			_qualityFold.Note = "";
+			ClearIssues();
+			return;
+		}
 		_refreshing = true;
 		try
 		{

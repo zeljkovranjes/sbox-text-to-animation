@@ -413,7 +413,23 @@ public sealed class TaButton : Widget
 	const float IconSize = 16f;
 	const float IconGap = 5f;
 
-	void Measure() => FixedWidth = WidthFor( _text.Length == 0 ? 0 : 6.2f * _text.Length );
+	bool _fill;
+
+	/// <summary>Stretches to the space the layout gives it (at least its text width) instead of hugging the text.</summary>
+	public bool Fill
+	{
+		get => _fill;
+		set { _fill = value; Measure(); }
+	}
+
+	void Measure() => SetWidth( WidthFor( _text.Length == 0 ? 0 : 6.2f * _text.Length ) );
+
+	void SetWidth( float width )
+	{
+		if ( !_fill ) { FixedWidth = width; return; }
+		MinimumWidth = width;
+		MaximumWidth = 16777215;
+	}
 
 	float WidthFor( float textWidth )
 	{
@@ -460,8 +476,8 @@ public sealed class TaButton : Widget
 		Paint.SetDefaultFont( 8 );
 		var textWidth = Paint.MeasureText( _text ).x;
 		var wanted = WidthFor( textWidth );
-		if ( MathF.Abs( wanted - FixedWidth ) > 0.5f )
-			FixedWidth = wanted;
+		if ( MathF.Abs( wanted - (_fill ? MinimumWidth : FixedWidth) ) > 0.5f )
+			SetWidth( wanted );
 		var hasIcon = !string.IsNullOrEmpty( _icon );
 		var group = textWidth + (hasIcon ? IconSize + IconGap : 0);
 		var x = LocalRect.Left + MathF.Max( PadX, (LocalRect.Width - group) * 0.5f );

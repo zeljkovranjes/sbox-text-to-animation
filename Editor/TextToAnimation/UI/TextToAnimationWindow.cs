@@ -69,6 +69,7 @@ public sealed class TextToAnimationWindow : Widget
 	Label _status;
 	TaButton _cancel;
 	string _lastProgress = "";
+	string _shownWork;
 
 	public TextToAnimationWindow( Widget parent ) : base( parent )
 	{
@@ -667,6 +668,10 @@ public sealed class TextToAnimationWindow : Widget
 		_indicator.Busy = showIndicator;
 		if ( showIndicator && _lastProgress.Length == 0 ) _indicator.SetMessage( Session.BusyText + "…" );
 		if ( !busy ) _lastProgress = "";
+		// the status bar says what's running instead of the last finished action
+		var working = _starting ?? (busy && Session.BusyText.Length > 0 ? Session.BusyText : null);
+		if ( working is not null && working != _shownWork ) SetStatus( working + "…", Tone.Neutral );
+		_shownWork = working;
 		Viewport.Visible = hasModel && !showIndicator;
 		_cancel.Visible = Flow.Running;
 		_clipTitle.Text = clip?.Name ?? (hasModel ? "No animation open" : "");

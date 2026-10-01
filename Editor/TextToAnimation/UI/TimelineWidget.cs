@@ -134,6 +134,7 @@ public sealed class TimelineWidget : Widget
 		Paint.SetDefaultFont( 7 );
 		var step = NiceStep( 60f / PixelsPerFrame );
 		var first = (int)MathF.Floor( _scroll / step ) * step;
+		var badge = FrameToX( _session.Playhead );
 		for ( var f = first; f <= Math.Min( FrameCount - 1, _scroll + VisibleFrames + step ); f += step )
 		{
 			if ( f < 0 ) continue;
@@ -141,8 +142,13 @@ public sealed class TimelineWidget : Widget
 			if ( x < TrackLeft - 1 || x > Width ) continue;
 			Paint.SetPen( Color.White.WithAlpha( .12f ), 1 );
 			Paint.DrawLine( new Vector2( x, RulerHeight - 6 ), new Vector2( x, Height ) );
+			// labels never hide under the playhead badge or run off the right edge
+			var label = $"{f}  {f / fps:0.0#}s";
+			var w = Paint.MeasureText( label ).x;
+			if ( x + 3 + w > Width - 4 ) continue;
+			if ( x + 3 + w > badge - 16 && x + 3 < badge + 16 ) continue;
 			Paint.SetPen( Theme.TextLight );
-			Paint.DrawText( new Rect( x + 3, 2, 70, RulerHeight - 6 ), $"{f}  {f / fps:0.0#}s", TextFlag.LeftCenter );
+			Paint.DrawText( new Rect( x + 3, 2, w + 2, RulerHeight - 6 ), label, TextFlag.LeftCenter );
 		}
 
 		// lanes

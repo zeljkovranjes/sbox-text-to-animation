@@ -71,14 +71,14 @@ public sealed class PosePanel : Widget
 		var keyRow = poseCard.Content.AddRow();
 		keyRow.Spacing = 4;
 		keyRow.Add( TaStyle.Icon( poseCard, "skip_previous", () => JumpKey( -1 ), "Previous key", 26 ) );
-		keyRow.Add( new TaButton( poseCard, "Key", "key", AddKey, "Key the selected bones on this frame" ) );
-		keyRow.Add( new TaButton( poseCard, "Delete key", "key_off", DeleteKey, "Remove the selected bones' keys on this frame" ) );
+		keyRow.Add( new TaButton( poseCard, "Key", "key", AddKey, "Key the selected bones on this frame" ) { Fill = true }, 1 );
+		keyRow.Add( new TaButton( poseCard, "Delete key", "key_off", DeleteKey, "Remove the selected bones' keys on this frame" ) { Fill = true }, 1 );
 		keyRow.Add( TaStyle.Icon( poseCard, "skip_next", () => JumpKey( 1 ), "Next key", 26 ) );
 		var copyRow = poseCard.Content.AddRow();
 		copyRow.Spacing = 4;
-		copyRow.Add( new TaButton( poseCard, "Copy pose", "content_copy", CopyPose, "Copy the selected bones' pose on this frame (all bones when nothing is selected)" ) );
-		copyRow.Add( new TaButton( poseCard, "Paste pose", "content_paste", PastePose, "Key the copied pose on this frame" ) );
-		copyRow.Add( new TaButton( poseCard, "Reset", "restart_alt", ResetPose, "Remove the selected bones' edits on every frame" ) );
+		copyRow.Add( new TaButton( poseCard, "Copy pose", "content_copy", CopyPose, "Copy the selected bones' pose on this frame (all bones when nothing is selected)" ) { Fill = true }, 1 );
+		copyRow.Add( new TaButton( poseCard, "Paste pose", "content_paste", PastePose, "Key the copied pose on this frame" ) { Fill = true }, 1 );
+		copyRow.Add( new TaButton( poseCard, "Reset", "restart_alt", ResetPose, "Remove the selected bones' edits on every frame" ) { Fill = true }, 1 );
 		var falloffRow = TaStyle.FieldRow( poseCard, poseCard.Content, "Blend", 70f, "How many frames a key fades in and out over" );
 		_falloff = falloffRow.Add( new FloatSlider( poseCard ) { Minimum = 1, Maximum = 60, Value = 8 }, 1 );
 		_falloffLabel = falloffRow.Add( TaStyle.Muted( new Label( "8 fr", poseCard ) { FixedWidth = 40 } ) );
@@ -92,15 +92,15 @@ public sealed class PosePanel : Widget
 
 		// ---- locks
 		var lockCard = Layout.Add( new TaFold( this, "lock", "Lock for regeneration", open: true, key: "pose.lockCard" ) );
-		lockCard.Content.Add( TaStyle.Muted( new Label( "Locked bones (amber) keep their motion when you use Generate → Edit.", lockCard ) { WordWrap = true }, small: true ) );
+		lockCard.Content.Add( TaStyle.Muted( new Label( "Locked bones (amber) keep their motion when you describe a change.", lockCard ) { WordWrap = true }, small: true ) );
 		var lockRow = lockCard.Content.AddRow();
 		lockRow.Spacing = 4;
-		lockRow.Add( new TaButton( lockCard, "Lock selected", "lock", () => BoneLocks.LockSelected( _session ) ) );
-		lockRow.Add( new TaButton( lockCard, "Lock hierarchy", "account_tree", () => BoneLocks.LockHierarchy( _session ) ) );
+		lockRow.Add( new TaButton( lockCard, "Lock selected", "lock", () => BoneLocks.LockSelected( _session ) ) { Fill = true }, 1 );
+		lockRow.Add( new TaButton( lockCard, "Lock hierarchy", "account_tree", () => BoneLocks.LockHierarchy( _session ) ) { Fill = true }, 1 );
 		var lockRow2 = lockCard.Content.AddRow();
 		lockRow2.Spacing = 4;
-		lockRow2.Add( new TaButton( lockCard, "Lock all except selected", "flip", () => BoneLocks.LockAllExcept( _session ) ) );
-		lockRow2.Add( new TaButton( lockCard, "Unlock", "lock_open", () => BoneLocks.Unlock( _session ), "Unlock the selection (all bones when nothing is selected)" ) );
+		lockRow2.Add( new TaButton( lockCard, "Lock all except selected", "flip", () => BoneLocks.LockAllExcept( _session ) ) { Fill = true }, 1 );
+		lockRow2.Add( new TaButton( lockCard, "Unlock", "lock_open", () => BoneLocks.Unlock( _session ), "Unlock the selection (all bones when nothing is selected)" ) { Fill = true }, 1 );
 
 		_session.Changed += c =>
 		{

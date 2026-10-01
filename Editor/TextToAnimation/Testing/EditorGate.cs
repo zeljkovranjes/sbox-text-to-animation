@@ -389,6 +389,8 @@ public static class EditorGate
 			foreach ( var tab in new[] { 0, 1, 2 } )
 			{
 				window.ShowTab( tab );
+				// the Edit tab with every section open, so the shot shows all of its controls
+				if ( tab == 0 ) foreach ( var f in window.EditPanel.Children.OfType<UI.TaFold>() ) f.Open = true;
 				Note( $"showcase editor tab {tab}" );
 				await EngineThread.DelayOnMain( 4000 );
 			}
