@@ -141,6 +141,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 			TwistBoneFollow.Apply( frames, rig.Rig, null );
 			// back to the workspace frame rate
 			var output = Resample( frames, UniMateModel.Fps, request.OutputFps );
+			EnforceConstraints( output, request );
 			results.Add( new GeneratedMotion { Frames = output, Fps = request.OutputFps, Seed = seed, Notes = notes } );
 		}
 		progress?.Invoke( new GenerationProgress( "Done", 1f ) );
@@ -221,6 +222,26 @@ public sealed class UniMateGenerator : IMotionGenerator
 		}
 		if ( source is not null && result.Count > source.Count ) result = result.GetRange( 0, source.Count );
 		return result;
+	}
+
+	/// <summary>Pinned poses (in-betweening) and locked bones (editing) come back exactly as they were.</summary>
+	static void EnforceConstraints( List<XForm[]> output, GenerationRequest request )
+	{
+		if ( request.SourceFrames is not { Count: > 1 } src ) return;
+		var keepPins = request.Mode == GenerationMode.InBetween && request.KeepFrames.Count > 0;
+		var keepBones = request.Mode == GenerationMode.TextEdit && request.KeepBones.Count > 0;
+		if ( !keepPins && !keepBones ) return;
+		// the source on the output's frame grid
+		var scale = request.OutputFps / Math.Max( 1f, request.SourceFps );
+		IReadOnlyList<XForm[]> source = src;
+		if ( MathF.Abs( scale - 1f ) > 1e-4f )
+		{
+			var grid = new List<XForm[]>( output.Count );
+			for ( var f = 0; f < output.Count; f++ ) grid.Add( ClipOps.Sample( src, f / scale ) );
+			source = grid;
+		}
+		if ( keepBones ) GenerationConstraints.RestoreBones( output, source, request.KeepBones );
+		if ( keepPins ) GenerationConstraints.RestorePins( output, source, request.KeepFrames.Select( f => (int)MathF.Round( f * scale ) ) );
 	}
 
 	static List<XForm[]> Resample( List<XForm[]> frames, float fromFps, float toFps )

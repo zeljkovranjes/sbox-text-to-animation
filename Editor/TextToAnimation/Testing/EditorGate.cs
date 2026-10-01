@@ -229,7 +229,40 @@ public static class EditorGate
 		var backups = Path.Combine( root, "text_to_animation", "backups" );
 		Check( "backups kept", Directory.Exists( backups ) && Directory.GetFiles( backups ).Length > 0 );
 
-		// ---- 13. showcase for window screenshots (driver -Capture): each tab for a few seconds
+		// ---- 13. posing: a key on one bone moves it to the requested pose, undo removes it
+		session.SelectClip( imported );
+		var arm = session.Rig.Skeleton.IndexOf( "arm_upper_R" );
+		var keyFrame = Math.Min( 10, imported.FrameCount - 1 );
+		var baseLocal = session.ActiveFrames[keyFrame][arm];
+		var posed = new Maths.XForm( baseLocal.Pos, System.Numerics.Quaternion.Normalize( System.Numerics.Quaternion.CreateFromAxisAngle( System.Numerics.Vector3.UnitX, 0.5f ) * baseLocal.Rot ) );
+		session.SelectBone( arm );
+		session.BeginInteractiveEdit( "Pose arm_upper_R" );
+		session.SetPoseKey( arm, keyFrame, posed );
+		session.EndInteractiveEdit();
+		var poseError = Maths.MathQ.AngleBetween( session.ActiveFrames[keyFrame][arm].Rot, posed.Rot ) * 180f / MathF.PI;
+		Check( "pose key reaches the requested pose", imported.Keys.KeyedBones.Contains( "arm_upper_R" ) && poseError < 0.5f, $"{poseError:0.000}°" );
+		session.UndoEdit();
+		var undoError = Maths.MathQ.AngleBetween( session.ActiveFrames[keyFrame][arm].Rot, baseLocal.Rot ) * 180f / MathF.PI;
+		Check( "undo removes the pose key", !imported.Keys.KeyedBones.Contains( "arm_upper_R" ) && undoError < 0.01f, $"{undoError:0.0000}°" );
+
+		// ---- 14. bone locks
+		var legL = session.Rig.Skeleton.IndexOf( "leg_upper_L" );
+		session.SelectBone( legL );
+		BoneLocks.LockSelected( session );
+		Check( "lock selected", imported.LockedBones.SetEquals( new[] { "leg_upper_L" } ), string.Join( ",", imported.LockedBones ) );
+		BoneLocks.LockHierarchy( session );
+		Check( "lock hierarchy", imported.LockedBones.Contains( "leg_lower_L" ) && imported.LockedBones.Contains( "ankle_L" ), $"{imported.LockedBones.Count} bones" );
+		BoneLocks.LockAllExcept( session );
+		Check( "lock all except selected", !imported.LockedBones.Contains( "leg_lower_L" ) && imported.LockedBones.Contains( "arm_upper_R" ) && imported.LockedBones.Contains( "pelvis" ), $"{imported.LockedBones.Count} bones" );
+		session.SelectBone( null );
+		BoneLocks.Unlock( session );
+		Check( "unlock all", imported.LockedBones.Count == 0 );
+
+		// ---- 15. every generation mode on the real model
+		if ( generated is not null )
+			await RunModeChecksAsync( window, session, generated, Check );
+
+		// ---- 16. showcase for window screenshots (driver -Capture): each tab for a few seconds
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" )
 		{
 			session.SelectClip( generated ?? imported );
@@ -244,6 +277,109 @@ public static class EditorGate
 		}
 
 		return checks.Values.All( v => v );
+	}
+
+	/// <summary>
+	/// In-betweening, text-guided editing, variations, multi-step sequences and cancellation, each through the
+	/// same request builder and flow as the Generate panel, checked against what the user asked to keep.
+	/// </summary>
+	static async Task RunModeChecksAsync( TextToAnimationWindow window, EditorSession session, AnimClip source, Action<string, bool, string> check )
+	{
+		var rig = session.Rig;
+		var flow = window.Flow;
+		const int Steps = 12;
+
+		async Task<List<AnimClip>> Generate( GenerationMode mode, string[] prompts, int count, string name, float strength = 0.5f )
+		{
+			await EngineThread.SwitchToMainThread();
+			session.SelectClip( source );
+			var request = GenerationFlow.BuildRequest( session, mode, prompts, 2f, 11, count, 3f, Steps, strength );
+			var problem = GenerationFlow.Validate( request );
+			if ( problem is not null ) { Note( $"{mode} request invalid: {problem}" ); return new List<AnimClip>(); }
+			var before = session.Workspace.Clips.ToList();
+			var sw = Stopwatch.StartNew();
+			var ok = await flow.GenerateAsync( request, replace: false, name );
+			await EngineThread.SwitchToMainThread();
+			Note( $"{mode}: {(ok ? "ok" : "failed")} in {sw.Elapsed.TotalSeconds:0.0} s" );
+			return ok ? session.Workspace.Clips.Except( before ).ToList() : new List<AnimClip>();
+		}
+		bool NoErrors( AnimClip c ) => ClipQuality.Analyze( c, rig ).All( q => q.Severity != IssueSeverity.Error );
+		float MaxAngle( IReadOnlyList<Maths.XForm[]> a, IReadOnlyList<Maths.XForm[]> b, IEnumerable<int> bones, IEnumerable<int> frames )
+		{
+			var worst = 0f;
+			foreach ( var f in frames ) foreach ( var bone in bones )
+				worst = MathF.Max( worst, Maths.MathQ.AngleBetween( a[f][bone].Rot, b[f][bone].Rot ) );
+			return worst * 180f / MathF.PI;
+		}
+		var motionBones = Enumerable.Range( 0, rig.Skeleton.Count ).Where( rig.IsMotionBone ).ToList();
+		var sourceFrames = source.EvaluateFrames( rig.Skeleton );
+		var all = Enumerable.Range( 0, source.FrameCount ).ToList();
+
+		// in-betweening: pinned poses come back exactly, the frames between are regenerated
+		session.SelectClip( source );
+		var pins = new[] { 0, source.FrameCount / 2, source.FrameCount - 1 };
+		session.Edit( "Pin frames", c => { c.PinnedFrames.Clear(); foreach ( var p in pins ) c.PinnedFrames.Add( p ); } );
+		var inbetween = (await Generate( GenerationMode.InBetween, new[] { "" }, 1, "Gate in-between" )).FirstOrDefault();
+		if ( inbetween is null ) check( "in-between generates", false, "" );
+		else
+		{
+			var pinError = MaxAngle( inbetween.Frames, sourceFrames, Enumerable.Range( 0, rig.Skeleton.Count ), pins );
+			var hipsError = pins.Max( p => (inbetween.Frames[p][rig.HipsIndex].Pos - sourceFrames[p][rig.HipsIndex].Pos).Length() );
+			check( "in-between keeps pinned poses exactly", inbetween.FrameCount == source.FrameCount && pinError < 0.01f && hipsError < 0.01f, $"{pinError:0.0000}° {hipsError:0.0000} in" );
+			check( "in-between has no quality errors", NoErrors( inbetween ), "" );
+		}
+		session.SelectClip( source );
+		session.Edit( "Unpin", c => c.PinnedFrames.Clear() );
+
+		// text-guided editing: both legs locked, the rest follows a new prompt
+		session.SelectClip( source );
+		session.SelectBones( new[] { rig.Skeleton.IndexOf( "leg_upper_L" ), rig.Skeleton.IndexOf( "leg_upper_R" ) } );
+		BoneLocks.LockHierarchy( session );
+		var locked = source.LockedBones.Select( rig.Skeleton.IndexOf ).Where( i => i >= 0 ).ToList();
+		var edited = (await Generate( GenerationMode.TextEdit, new[] { "wave with the right hand" }, 1, "Gate edit" )).FirstOrDefault();
+		if ( edited is null ) check( "text edit generates", false, "" );
+		else
+		{
+			var lockedError = MaxAngle( edited.Frames, sourceFrames, locked, all );
+			var free = motionBones.Except( locked ).ToList();
+			var changed = MaxAngle( edited.Frames, sourceFrames, free, all );
+			check( "text edit keeps locked bones exactly", locked.Count >= 6 && lockedError < 0.01f, $"{locked.Count} bones, {lockedError:0.0000}°" );
+			check( "text edit changes the unlocked bones", changed > 5f, $"{changed:0.0}°" );
+			check( "text edit has no quality errors", NoErrors( edited ), "" );
+		}
+		session.SelectClip( source );
+		session.SelectBone( null );
+		BoneLocks.Unlock( session );
+
+		// variations: two takes, both different from the source and from each other
+		var takes = await Generate( GenerationMode.Variation, new[] { "" }, 2, "Gate variation", 0.5f );
+		if ( takes.Count != 2 ) check( "variations generate two takes", false, $"{takes.Count}" );
+		else
+		{
+			var fromSource = MaxAngle( takes[0].Frames, sourceFrames, motionBones, all.Where( f => f < takes[0].FrameCount ) );
+			var between = MaxAngle( takes[0].Frames, takes[1].Frames, motionBones, Enumerable.Range( 0, Math.Min( takes[0].FrameCount, takes[1].FrameCount ) ) );
+			check( "variations generate two takes", takes.All( t => t.FrameCount == source.FrameCount ), string.Join( ",", takes.Select( t => t.Name ) ) );
+			check( "variations differ from the source and each other", fromSource > 2f && between > 2f, $"{fromSource:0.0}° / {between:0.0}°" );
+			check( "variations have no quality errors", takes.All( NoErrors ), "" );
+		}
+
+		// multi-step sequence: three prompts chained into one longer motion
+		var sequence = (await Generate( GenerationMode.Expansion, new[] { "walk forward", "turn around", "walk forward" }, 1, "Gate sequence" )).FirstOrDefault();
+		check( "multi-step sequence generates a longer motion", sequence is not null && sequence.Duration > 4f, sequence is null ? "" : $"{sequence.Duration:0.00} s" );
+		if ( sequence is not null ) check( "multi-step sequence has no quality errors", NoErrors( sequence ), "" );
+
+		// cancellation: nothing is added and the editor is usable again
+		await EngineThread.SwitchToMainThread();
+		session.SelectClip( source );
+		var clipsBefore = session.Workspace.Clips.Count;
+		var request = GenerationFlow.BuildRequest( session, GenerationMode.TextToMotion, new[] { "jump" }, 4f, 3, 1, 3f, 40, 0.5f );
+		var task = flow.GenerateAsync( request, replace: false, "Gate cancelled" );
+		await EngineThread.DelayOnMain( 1500 );
+		var wasBusy = session.Busy;
+		flow.Cancel();
+		var result = await task;
+		await EngineThread.SwitchToMainThread();
+		check( "generation can be cancelled", wasBusy && !result && !session.Busy && session.Workspace.Clips.Count == clipsBefore, $"busy={wasBusy} result={result}" );
 	}
 
 	static List<string> Kv3Sequences( string vmdlPath )

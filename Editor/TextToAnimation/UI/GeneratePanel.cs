@@ -245,49 +245,19 @@ public sealed class GeneratePanel : Widget
 
 	GenerationRequest BuildRequest()
 	{
-		var clip = _session.ActiveClip;
-		var mode = Mode;
-		var prompts = mode == GenerationMode.Expansion
-			? _stepEdits.Select( e => e.Text.Trim() ).Where( t => t.Length > 0 ).ToList()
-			: new List<string> { _prompt.PlainText.Trim() };
-		if ( mode is GenerationMode.Variation or GenerationMode.InBetween && string.IsNullOrWhiteSpace( prompts[0] ) && clip?.Generation?.Prompts.FirstOrDefault() is { } original )
-			prompts[0] = original;
-		var frames = clip is not null && mode is GenerationMode.InBetween or GenerationMode.TextEdit or GenerationMode.Variation ? _session.ActiveFrames : null;
-		var keepBones = clip is null ? Array.Empty<int>() : clip.LockedBones.Select( _session.Rig.Skeleton.IndexOf ).Where( i => i >= 0 ).ToArray();
-		return new GenerationRequest
-		{
-			Mode = mode,
-			Prompts = prompts,
-			DurationSeconds = mode == GenerationMode.TextToMotion ? _duration.Value : 0,
-			OutputFps = clip?.Fps ?? _session.Workspace?.DefaultFps ?? 30f,
-			Seed = int.TryParse( _seed.Text, out var seed ) ? seed : Random.Shared.Next(),
-			Count = _takeCount,
-			Guidance = _guidance.Value,
-			Steps = _steps,
-			SourceFrames = frames,
-			SourceFps = clip?.Fps ?? 30f,
-			KeepFrames = clip?.PinnedFrames.ToList() ?? new List<int>(),
-			KeepBones = keepBones,
-			VariationStrength = _strength.Value,
-		};
+		var prompts = Mode == GenerationMode.Expansion
+			? _stepEdits.Select( e => e.Text ).ToList()
+			: new List<string> { _prompt.PlainText };
+		return GenerationFlow.BuildRequest( _session, Mode, prompts, _duration.Value,
+			int.TryParse( _seed.Text, out var seed ) ? seed : Random.Shared.Next(), _takeCount, _guidance.Value, _steps, _strength.Value );
 	}
 
 	void Run( bool replace )
 	{
 		var request = BuildRequest();
-		if ( request.Mode is GenerationMode.TextToMotion or GenerationMode.TextEdit && string.IsNullOrWhiteSpace( request.Prompts.FirstOrDefault() ) )
+		if ( GenerationFlow.Validate( request ) is { } problem )
 		{
-			_session.SetStatus( "Describe the motion first.", Tone.Amber );
-			return;
-		}
-		if ( request.Mode == GenerationMode.Expansion && request.Prompts.Count == 0 )
-		{
-			_session.SetStatus( "Add at least one step.", Tone.Amber );
-			return;
-		}
-		if ( request.Mode == GenerationMode.InBetween && request.KeepFrames.Count < 2 )
-		{
-			_session.SetStatus( "Pin at least two frames on the timeline first (double click the Pinned lane).", Tone.Amber );
+			_session.SetStatus( problem, Tone.Amber );
 			return;
 		}
 		var name = request.Mode switch

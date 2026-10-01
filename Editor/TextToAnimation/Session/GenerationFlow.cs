@@ -154,6 +154,52 @@ public sealed class GenerationFlow
 		_session.AddClip( clip, select );
 	}
 
+	/// <summary>
+	/// The request for <paramref name="mode"/> on the active clip: its final frames, pinned frames and locked
+	/// bones. Empty prompts are dropped; variations and in-betweens fall back to the clip's original prompt.
+	/// </summary>
+	public static GenerationRequest BuildRequest( EditorSession session, GenerationMode mode, IEnumerable<string> prompts,
+		float durationSeconds, int seed, int count, float guidance, int steps, float variationStrength )
+	{
+		var clip = session.ActiveClip;
+		var list = (prompts ?? Enumerable.Empty<string>()).Select( p => (p ?? "").Trim() ).ToList();
+		if ( mode != GenerationMode.Expansion ) list = new List<string> { list.FirstOrDefault() ?? "" };
+		else list = list.Where( p => p.Length > 0 ).ToList();
+		if ( mode is GenerationMode.Variation or GenerationMode.InBetween && list.Count > 0 && list[0].Length == 0
+			&& clip?.Generation?.Prompts.FirstOrDefault() is { } original )
+			list[0] = original;
+		var usesClip = clip is not null && mode is GenerationMode.InBetween or GenerationMode.TextEdit or GenerationMode.Variation;
+		return new GenerationRequest
+		{
+			Mode = mode,
+			Prompts = list,
+			DurationSeconds = mode == GenerationMode.TextToMotion ? durationSeconds : 0,
+			OutputFps = clip?.Fps ?? session.Workspace?.DefaultFps ?? 30f,
+			Seed = seed,
+			Count = Math.Clamp( count, 1, 8 ),
+			Guidance = guidance,
+			Steps = steps,
+			SourceFrames = usesClip ? session.ActiveFrames : null,
+			SourceFps = clip?.Fps ?? 30f,
+			KeepFrames = usesClip ? clip.PinnedFrames.ToList() : new List<int>(),
+			KeepBones = usesClip ? clip.LockedBones.Select( session.Rig.Skeleton.IndexOf ).Where( i => i >= 0 ).ToArray() : Array.Empty<int>(),
+			VariationStrength = variationStrength,
+		};
+	}
+
+	/// <summary>What is missing before the request can run (null = ready), phrased for the status bar.</summary>
+	public static string Validate( GenerationRequest request )
+	{
+		var needsClip = request.Mode is GenerationMode.InBetween or GenerationMode.TextEdit or GenerationMode.Variation;
+		if ( needsClip && request.SourceFrames is not { Count: > 1 } ) return "Open an animation first.";
+		if ( request.Mode is GenerationMode.TextToMotion or GenerationMode.TextEdit && string.IsNullOrWhiteSpace( request.Prompts.FirstOrDefault() ) )
+			return "Describe the motion first.";
+		if ( request.Mode == GenerationMode.Expansion && request.Prompts.Count == 0 ) return "Add at least one step.";
+		if ( request.Mode == GenerationMode.InBetween && request.KeepFrames.Count < 2 )
+			return "Pin at least two frames on the timeline first (double click the Pinned lane).";
+		return null;
+	}
+
 	/// <summary>A short clip name from a prompt ("Walk cautiously forward, look behind" -> "Walk cautiously forward").</summary>
 	public static string NameFromPrompt( string prompt )
 	{
