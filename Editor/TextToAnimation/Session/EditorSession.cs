@@ -129,6 +129,7 @@ public sealed class EditorSession
 		var model = await ModelBridge.LoadAsync( asset.Path );
 		if ( model is null || model.IsError ) return $"{asset.Path} could not be loaded.";
 		if ( model.BoneCount == 0 ) return $"{asset.Name} has no skeleton - it can't be animated.";
+		if ( ModelBridge.SkeletonProblem( model ) is { } broken ) return broken;
 
 		var skeleton = ModelBridge.SkeletonFromModel( model );
 		var rig = MotionRig.Create( skeleton );

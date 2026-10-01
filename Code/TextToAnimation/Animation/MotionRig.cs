@@ -160,9 +160,21 @@ public sealed class MotionRig
         ArgumentNullException.ThrowIfNull(skeleton);
         var problems = new List<string>();
         var map = ProfileDetector.Detect(skeleton)?.Result ?? AutoMapper.Map(skeleton);
+        // names can contradict themselves on unusual rigs (a hand-only rig: one bone guessed as both Neck and
+        // UpperLegL). A bone with several roles keeps none - the shape analysis decides instead.
+        foreach (var bone in map.RoleToBone.GroupBy(kv => kv.Value).Where(g => g.Count() > 1).ToList())
+            foreach (var (role, _) in bone.ToList())
+                map.RoleToBone.Remove(role);
         if (map.Confidence < 0.5f)
             problems.Add($"Bone roles were only partly recognised ({map.Confidence:P0}). Check the bone mapping.");
-        var rig = TargetRig.FromSkeleton(skeleton, map);
+        TargetRig rig;
+        try { rig = TargetRig.FromSkeleton(skeleton, map); }
+        catch (ArgumentException)
+        {
+            // never fail to open a model over its bone names: fall back to the skeleton's shape alone
+            map = new MappingResult("shape", map.Source);
+            rig = TargetRig.FromSkeleton(skeleton, map);
+        }
         return new MotionRig(skeleton, rig, map, unitsPerCm, problems);
     }
 

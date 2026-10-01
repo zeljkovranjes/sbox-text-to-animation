@@ -371,6 +371,7 @@ public sealed class TextToAnimationWindow : Widget
 			if ( !result.Compiled || result.Asset is null ) { SetStatus( result.Error ?? "The model did not compile.", Tone.Red ); return; }
 			_firstLoad.SetMessage( $"Opening {result.Asset.Name}…" );
 			await OpenModelAsync( result.Asset );
+			if ( result.Note is not null ) SetStatus( result.Note, Tone.Amber );
 		}
 		catch ( Exception e )
 		{

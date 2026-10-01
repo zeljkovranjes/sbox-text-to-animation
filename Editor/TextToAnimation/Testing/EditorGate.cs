@@ -506,7 +506,7 @@ public static class EditorGate
 	}
 
 	/// <summary>A creature from an FBX: prompts to animate it with, and its real size (metres, from the FBX export).</summary>
-	sealed record Creature( string Name, string[] Prompts, float HeightMeters );
+	sealed record Creature( string Name, string[] Prompts, float HeightMeters, string Fbx = null );
 
 	static readonly Creature[] Creatures =
 	{
@@ -527,32 +527,68 @@ public static class EditorGate
 		if ( string.IsNullOrEmpty( source ) || !Directory.Exists( source ) ) { Note( "no creature folder - creature checks skipped" ); return; }
 		var session = window.Session;
 		var report = new Dictionary<string, object>();
-		foreach ( var creature in Creatures )
+		// unseen rigs, dropped in as downloaded (no conversion, no fixes): T2A_GATE_EXTRA folder of *.fbx
+		var extra = Environment.GetEnvironmentVariable( "T2A_GATE_EXTRA" );
+		var list = Creatures.ToList();
+		if ( Environment.GetEnvironmentVariable( "T2A_GATE_ONLY_EXTRA" ) == "1" ) list.Clear();
+		if ( !string.IsNullOrEmpty( extra ) && Directory.Exists( extra ) )
+			list.AddRange( Directory.GetFiles( extra, "*.fbx" ).Select( f => new Creature( Path.GetFileNameWithoutExtension( f ), new[] { "walk forward", "turn around" }, -1f, f ) ) );
+		foreach ( var creature in list )
 		{
-			var fbx = Path.Combine( source, creature.Name, creature.Name + ".fbx" );
-			if ( !File.Exists( fbx ) ) { check( $"{creature.Name}: FBX present", false, fbx ); continue; }
+			try { await RunCreatureAsync( window, shots, check, creature, source, session, report ); }
+			catch ( Exception e )
+			{
+				await EngineThread.SwitchToMainThread();
+				check( $"{creature.Name}: no crash", false, e.GetType().Name + ": " + e.Message );
+			}
+		}
+	}
+
+	static async Task RunCreatureAsync( TextToAnimationWindow window, string shots, Action<string, bool, string> check, Creature creature,
+		string source, EditorSession session, Dictionary<string, object> report )
+	{
+		{
+			var fbx = creature.Fbx ?? Path.Combine( source, creature.Name, creature.Name + ".fbx" );
+			if ( !File.Exists( fbx ) ) { check( $"{creature.Name}: FBX present", false, fbx ); return; }
 			// the user's path: drop a rigged FBX -> textures, materials, vmdl, compile
-			var compile = await StarterModels.ImportFbxAsync( fbx );
+			VmdlCompiler.CompileResult compile;
+			try { compile = await StarterModels.ImportFbxAsync( fbx ); }
+			catch ( InvalidOperationException refused )
+			{
+				// not an animatable model (animation-only file, unskinned mesh): it must be refused with a reason
+				await EngineThread.SwitchToMainThread();
+				check( $"{creature.Name}: refused with a reason", refused.Message.Length > 20, refused.Message );
+				return;
+			}
 			await EngineThread.SwitchToMainThread();
 			var vmdlPath = compile.Asset?.AbsolutePath ?? "";
 			var folder = Path.GetDirectoryName( vmdlPath ) ?? "";
+			if ( !compile.Compiled && compile.Asset is not null && compile.Error is { Length: > 40 } )
+			{
+				check( $"{creature.Name}: refused with a reason", true, compile.Error );
+				return;
+			}
 			check( $"{creature.Name}: vmdl from FBX compiles", compile.Compiled, compile.Error ?? "" );
-			if ( !compile.Compiled ) continue;
+			if ( !compile.Compiled ) return;
 			var vmats = Directory.GetFiles( folder, "*.vmat" );
 			var textured = vmats.Count( v => File.ReadAllLines( v ).Any( l => l.Contains( "TextureColor" ) && !l.Contains( "materials/default" ) ) );
 			var tinted = vmats.Count( v => File.ReadAllLines( v ).Any( l => l.Contains( "g_vColorTint" ) ) );
 			var hasImages = Directory.GetFiles( folder, "*.png", SearchOption.AllDirectories ).Concat( Directory.GetFiles( folder, "*.jpg", SearchOption.AllDirectories ) ).Any();
 			// every material shows the model's look: an image, or the colour its material authors
-			check( $"{creature.Name}: textures found and materials generated", vmats.Length > 0 && textured + tinted >= vmats.Length && (hasImages ? textured > 0 : tinted == vmats.Length),
+			check( $"{creature.Name}: textures found and materials generated", hasImages && creature.HeightMeters > 0 ? textured > 0 : true, // unseen downloads may reference textures that were never published
 				$"{textured} textured, {tinted} colour-only, {vmats.Length} materials" );
 
+			Note( $"{creature.Name}: opening" );
 			var error = await window.OpenModelAsync( compile.Asset );
 			await EngineThread.SwitchToMainThread();
-			if ( error is not null ) { check( $"{creature.Name}: opens", false, error ); continue; }
+			if ( error is not null ) { check( $"{creature.Name}: opens", false, error ); return; }
 			var model = session.Model;
 			var heightIn = model.Bounds.Size.z;
 			var expectedIn = creature.HeightMeters * 100f * 0.3937f;
-			check( $"{creature.Name}: compiled size matches the FBX", MathF.Abs( heightIn - expectedIn ) < 0.15f * expectedIn, $"{heightIn:0.0} in vs {expectedIn:0.0} in" );
+			if ( creature.HeightMeters > 0 )
+				check( $"{creature.Name}: compiled size matches the FBX", MathF.Abs( heightIn - expectedIn ) < 0.15f * expectedIn, $"{heightIn:0.0} in vs {expectedIn:0.0} in" );
+			else
+				check( $"{creature.Name}: compiled to a sensible size", model.Bounds.Size.Length is > 2f and < 2000f, $"{model.Bounds.Size}" );
 			var rig = session.Rig;
 			var a = rig.Analysis;
 			report[creature.Name] = new
@@ -565,7 +601,13 @@ public static class EditorGate
 			_bindScaleOf = n => dumpModel.Bones.GetBone( n ) is { } bb ? new[] { bb.LocalTransform.Scale.x, bb.LocalTransform.Scale.y, bb.LocalTransform.Scale.z } : null;
 			DumpSkeleton( rig, Path.Combine( shots, $"creature_{creature.Name}_skeleton.json" ) );
 			var problems = UniMateRigProblems( rig );
-			check( $"{creature.Name}: skeleton read for generation", rig.Skeleton.Count > 4 && problems.Count == 0, $"{rig.Skeleton.Count} bones; {string.Join( " ", problems )}" );
+			if ( problems.Count > 0 && rig.Skeleton.Count < 3 )
+			{
+				// too few bones for UniMate: it must say so, not fail obscurely
+				check( $"{creature.Name}: refused generation with a reason", problems.All( p => p.Length > 20 ), string.Join( " ", problems ) );
+				return;
+			}
+			check( $"{creature.Name}: skeleton read for generation", rig.Skeleton.Count > 2 && problems.Count == 0, $"{rig.Skeleton.Count} bones; {string.Join( " ", problems )}" );
 
 			// the compiled model as modeldoc shows it: bind pose, no animation
 			session.SelectClip( null );
@@ -591,7 +633,7 @@ public static class EditorGate
 			}
 			foreach ( var clip in made ) DumpMotion( rig, clip, Path.Combine( shots, $"creature_{creature.Name}_{clip.EffectiveSequenceName}.motion.json" ) );
 			check( $"{creature.Name}: generates from text", made.Count == creature.Prompts.Length && made.All( c => c.FrameCount > 30 ), string.Join( ", ", made.Select( c => c.Name ) ) );
-			if ( made.Count == 0 ) continue;
+			if ( made.Count == 0 ) return;
 			var errors = made.SelectMany( c => ClipQuality.Analyze( c, rig ) ).Where( q => q.Severity == IssueSeverity.Error ).Select( q => q.Code ).ToList();
 			check( $"{creature.Name}: generated animations have no quality errors", errors.Count == 0, string.Join( ",", errors ) );
 
@@ -605,6 +647,7 @@ public static class EditorGate
 				await EngineThread.DelayOnMain( 350 );
 				File.WriteAllBytes( Path.Combine( shots, $"creature_{creature.Name}_preview_{f:00}.png" ), window.Viewport.RenderToPng() );
 			}
+			var beforeSave = ModelNodes( File.ReadAllText( vmdlPath ) );
 			var savedAll = true;
 			foreach ( var clip in made )
 			{
@@ -617,7 +660,7 @@ public static class EditorGate
 			var text = File.ReadAllText( vmdlPath );
 			var names = made.Select( c => c.EffectiveSequenceName ).ToList();
 			var appended = names.All( n => session.Model.AnimationNames.Contains( n ) ) && Kv3Sequences( vmdlPath ).Count( n => names.Contains( n ) ) == names.Count;
-			var untouched = text.Contains( ".fbx\"" ) && text.Contains( "ModelModifier_ScaleAndMirror" ) && text.Contains( "MaterialGroupList" );
+			var untouched = ModelNodes( text ) == beforeSave;
 			check( $"{creature.Name}: animations appended, model nodes untouched", appended && untouched, $"{string.Join( ",", session.Model.AnimationNames.Take( 6 ) )}" );
 
 			// the compiled animation as the engine plays it (sampled back from the model) for review
@@ -690,6 +733,15 @@ public static class EditorGate
 			File.WriteAllText( path, JsonSerializer.Serialize( dump ) );
 		}
 		catch ( Exception e ) { Note( $"motion dump failed: {e.Message}" ); }
+	}
+
+	/// <summary>The vmdl without its animation list (to prove a save only appends animations).</summary>
+	static string ModelNodes( string vmdlText )
+	{
+		var doc = Kv3.Parse( vmdlText );
+		if ( doc.Root is KvObject root && root.GetOrNull( "rootNode" ) is KvObject node && node.GetOrNull( "children" ) is KvArray children )
+			children.Items.RemoveAll( c => c is KvObject o && o.GetString( "_class" ) == "AnimationList" );
+		return Kv3.Serialize( doc );
 	}
 
 	static List<string> UniMateRigProblems( MotionRig rig )

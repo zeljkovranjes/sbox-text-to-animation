@@ -25,6 +25,8 @@ public static class VmdlCompiler
 		public bool Compiled { get; set; }
 		public Asset Asset { get; set; }
 		public string Error { get; set; }
+		/// <summary>Something the user should know about how the model was made (e.g. a unit fix).</summary>
+		public string Note { get; set; }
 	}
 
 	/// <summary>Registers the files (absolute paths), then compiles <paramref name="vmdlAbsolute"/>.</summary>

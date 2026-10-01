@@ -80,11 +80,16 @@ public static class StarterModels
 	/// is written that keeps every bone (unweighted helpers too), scales the file's units to s&amp;box inches and
 	/// remaps the materials - then it is compiled.
 	/// </summary>
-	public static Task<VmdlCompiler.CompileResult> ImportFbxAsync( string fbxPath )
+	public static async Task<VmdlCompiler.CompileResult> ImportFbxAsync( string fbxPath )
 	{
 		if ( AssetsRoot is null ) throw new InvalidOperationException( "Open a project first." );
 		var bytes = File.ReadAllBytes( fbxPath );
 		var name = Path.GetFileNameWithoutExtension( fbxPath );
+		var (meshes, skins) = FbxContents( bytes );
+		if ( meshes == 0 )
+			throw new InvalidOperationException( $"{Path.GetFileName( fbxPath )} has no mesh - it looks like an animation-only file. Drop the model's FBX (the one with the mesh) instead." );
+		if ( skins == 0 )
+			throw new InvalidOperationException( $"{Path.GetFileName( fbxPath )} has a mesh that isn't skinned to a skeleton, so it can't be animated. Rig it first (skin the mesh to an armature)." );
 		var vmdlPath = DefaultTarget( name );
 		var folder = Path.GetDirectoryName( vmdlPath )!;
 		Directory.CreateDirectory( folder );
@@ -95,15 +100,94 @@ public static class StarterModels
 		FbxMaterials.CopySidecarTextures( Path.GetDirectoryName( fbxPath ), folder,
 			FbxMaterials.ExtractFbxMaterials( bytes ).SelectMany( m => m.TextureReferences ) );
 		FbxMaterials.ExtractEmbeddedTextures( bytes, folder );
+		CopyTextureFolders( Path.GetDirectoryName( fbxPath ), folder );
 		var remaps = FbxMaterials.GenerateMissingVmats( fbxDest );
 
 		var relative = Path.GetRelativePath( AssetsRoot, fbxDest ).Replace( '\\', '/' );
 		var scale = 0.3937f * FbxUnitScaleCm( bytes );
-		var text = Vmdl.VmdlWriter.GenerateStandalone( "", Array.Empty<Vmdl.AnimEntry>(), scale, "",
-			meshFilePath: relative, materialRemaps: remaps );
-		text = KeepAllBones( text, FbxBoneNames( bytes ) );
-		File.WriteAllText( vmdlPath, text );
-		return VmdlCompiler.RegisterAndCompileAsync( vmdlPath, new[] { fbxDest } );
+		var bones = FbxBoneNames( bytes );
+		string Write( float s ) => KeepAllBones( Vmdl.VmdlWriter.GenerateStandalone( "", Array.Empty<Vmdl.AnimEntry>(), s, "",
+			meshFilePath: relative, materialRemaps: remaps ), bones );
+		File.WriteAllText( vmdlPath, Write( scale ) );
+		var result = await VmdlCompiler.RegisterAndCompileAsync( vmdlPath, new[] { fbxDest } );
+		if ( !result.Compiled ) return result;
+
+		// many exporters (Houdini, some Blender setups) write metres without saying so: the file then reads as
+		// centimetres and the model comes out a hundred times too small. A game creature is not under 4 inches.
+		await EngineThread.SwitchToMainThread();
+		var model = await ModelBridge.LoadAsync( result.Asset.Path );
+		if ( model is not null && !model.IsError && ModelBridge.SkeletonProblem( model ) is { } broken )
+			return new VmdlCompiler.CompileResult { Compiled = false, Asset = result.Asset, Error = broken };
+		if ( model is not null && !model.IsError && model.BoneCount == 0 )
+			return new VmdlCompiler.CompileResult { Compiled = false, Asset = result.Asset,
+				Error = $"{Path.GetFileName( fbxPath )} is skinned, but s&box found no skeleton bones in it - it's usually an old-style rig skinned to ordinary objects. Convert those objects to an armature/joints in your 3D app and export again." };
+		var size = model is null || model.IsError ? 0f : MathF.Max( model.Bounds.Size.x, MathF.Max( model.Bounds.Size.y, model.Bounds.Size.z ) );
+		if ( size > 0f && size < 4f )
+		{
+			File.WriteAllText( vmdlPath, Write( scale * 100f ) );
+			var rescaled = await VmdlCompiler.RegisterAndCompileAsync( vmdlPath, new[] { fbxDest } );
+			if ( rescaled.Compiled )
+			{
+				rescaled.Note = $"{Path.GetFileName( fbxPath )} came out {size:0.##} in long - its units look like metres, so it was scaled up 100x. Change the ScaleAndMirror scale in the vmdl if that's wrong.";
+				return rescaled;
+			}
+		}
+		return result;
+	}
+
+	/// <summary>
+	/// Downloads keep textures in folders with all kinds of names ("Textures_and_Materials", "Tex", "Materials",
+	/// "Maps"): images in sibling or child folders whose name says so are copied to &lt;model&gt;/textures, so the
+	/// material detection can match them to the FBX's materials.
+	/// </summary>
+	static void CopyTextureFolders( string sourceDir, string destDir )
+	{
+		if ( string.IsNullOrEmpty( sourceDir ) || !Directory.Exists( sourceDir ) ) return;
+		static bool TextureLike( string dir )
+		{
+			var name = Path.GetFileName( dir ).ToLowerInvariant();
+			return name.Contains( "tex" ) || name.Contains( "material" ) || name.Contains( "map" ) || name == "images";
+		}
+		var folders = Directory.GetDirectories( sourceDir ).Where( TextureLike ).ToList();
+		var parent = Path.GetDirectoryName( sourceDir );
+		if ( parent is not null && Directory.Exists( parent ) )
+			folders.AddRange( Directory.GetDirectories( parent ).Where( d => TextureLike( d ) && !string.Equals( d, sourceDir, StringComparison.OrdinalIgnoreCase ) ) );
+		var images = new[] { ".png", ".jpg", ".jpeg", ".tga", ".dds", ".webp" };
+		foreach ( var folder in folders.Distinct( StringComparer.OrdinalIgnoreCase ) )
+		{
+			foreach ( var file in Directory.GetFiles( folder, "*", SearchOption.AllDirectories ).Where( f => images.Contains( Path.GetExtension( f ).ToLowerInvariant() ) ).Take( 400 ) )
+			{
+				var dest = Path.Combine( destDir, "textures", Path.GetFileName( file ) );
+				if ( File.Exists( dest ) ) continue;
+				try
+				{
+					Directory.CreateDirectory( Path.GetDirectoryName( dest )! );
+					File.Copy( file, dest );
+					EngineThread.Try( () => AssetSystem.RegisterFile( dest ) );
+				}
+				catch ( IOException ) { }
+			}
+		}
+	}
+
+	/// <summary>An FBX object's type: its last string property ("Mesh", "Skin", "LimbNode").</summary>
+	static string Kind( Formats.Fbx.FbxNode node ) => node.Properties.OfType<string>().LastOrDefault();
+
+	/// <summary>How many mesh geometries and skin deformers an FBX holds (0 meshes: an animation-only file).</summary>
+	public static (int Meshes, int Skins) FbxContents( byte[] fbx )
+	{
+		try
+		{
+			var objects = Formats.Fbx.FbxTokenizer.Parse( fbx ).Child( "Objects" );
+			if ( objects is null ) return (0, 0);
+			// FBX 7 keeps meshes in Geometry objects; FBX 6 inside Model objects (with their vertices). The type is
+			// the last string property in both ("Mesh", "Skin", "LimbNode")
+			var meshes = objects.ChildrenNamed( "Geometry" ).Count( g => Kind( g ) == "Mesh" )
+				+ objects.ChildrenNamed( "Model" ).Count( m => Kind( m ) == "Mesh" && m.Child( "Vertices" ) is not null );
+			var skins = objects.ChildrenNamed( "Deformer" ).Count( d => Kind( d ) == "Skin" );
+			return (meshes, skins);
+		}
+		catch { return (1, 1); } // unreadable here: let the engine's importer decide
 	}
 
 	/// <summary>The skeleton bones (LimbNode / Null joints) an FBX declares, by name.</summary>
@@ -115,8 +199,10 @@ public static class StarterModels
 			var objects = Formats.Fbx.FbxTokenizer.Parse( fbx ).Child( "Objects" );
 			foreach ( var model in objects?.ChildrenNamed( "Model" ) ?? Enumerable.Empty<Formats.Fbx.FbxNode>() )
 			{
-				if ( model.Properties.Count < 3 || model.Properties[1] is not string raw || model.Properties[2] is not string kind ) continue;
-				if ( kind != "LimbNode" && kind != "Root" ) continue;
+				var kind = Kind( model );
+				if ( kind is not ("LimbNode" or "Limb" or "Root") ) continue;
+				var raw = model.Properties.OfType<string>().FirstOrDefault();
+				if ( raw is null ) continue;
 				names.Add( Formats.Fbx.FbxNode.SplitName( raw ).Name );
 			}
 		}

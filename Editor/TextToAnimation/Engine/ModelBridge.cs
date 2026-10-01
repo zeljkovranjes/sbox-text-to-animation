@@ -26,17 +26,71 @@ public static class ModelBridge
 {
 	/// <summary>Builds the engine-space skeleton of a model. <c>Bone.LocalTransform</c> is MODEL space despite
 	/// its name (measured in humanoid-retargeter), so parent-local rest transforms are derived here.</summary>
+	/// <summary>
+	/// Why the compiled skeleton can't be used, or null. Uses only the name and parent lookups: on a skeleton whose
+	/// parents loop, every engine call that walks the hierarchy (bone transforms, the bone list) never returns.
+	/// </summary>
+	public static string SkeletonProblem( Model model )
+	{
+		var count = model.BoneCount;
+		var parents = new int[count];
+		for ( var i = 0; i < count; i++ ) parents[i] = model.GetBoneParent( i );
+		for ( var i = 0; i < count; i++ )
+		{
+			var steps = 0;
+			for ( var p = parents[i]; p >= 0 && p < count; p = parents[p] )
+			{
+				if ( ++steps > count || p == i )
+				{
+					var unnamed = Enumerable.Range( 0, count ).Any( b => string.IsNullOrWhiteSpace( model.GetBoneName( b ) ) );
+					return "s&box compiled this model's skeleton into a loop" + (unnamed ? " (a bone has no name - usually the root)" : "")
+						+ ", so it can't be animated. Give every bone a name in your 3D app and export the FBX again.";
+				}
+			}
+		}
+		return null;
+	}
+
 	public static Skeleton SkeletonFromModel( Model model )
 	{
 		static XForm ToXForm( Transform t ) => new(
 			new NVector3( t.Position.x, t.Position.y, t.Position.z ),
 			NQuaternion.Normalize( new NQuaternion( t.Rotation.x, t.Rotation.y, t.Rotation.z, t.Rotation.w ) ) );
-		var defs = new List<BoneDefinition>();
-		foreach ( var bone in model.Bones.AllBones )
+		// index-based and bounded: on some imported models the engine's bone tree enumeration (Bones.AllBones)
+		// never returns, so it is not used. A parent chain that loops is cut (that bone becomes a root).
+		var count = model.BoneCount;
+		var names = new string[count];
+		var parents = new int[count];
+		var world = new XForm[count];
+		for ( var i = 0; i < count; i++ )
 		{
-			var world = ToXForm( bone.LocalTransform );
-			var local = bone.Parent is null ? world : XForm.ToLocal( ToXForm( bone.Parent.LocalTransform ), world );
-			defs.Add( new BoneDefinition( bone.Name, bone.Parent?.Name, local ) );
+			names[i] = model.GetBoneName( i );
+			parents[i] = model.GetBoneParent( i );
+			if ( parents[i] < -1 || parents[i] >= count || parents[i] == i ) parents[i] = -1;
+			world[i] = ToXForm( model.GetBoneTransform( i ) );
+		}
+		for ( var i = 0; i < count; i++ )
+		{
+			var steps = 0;
+			for ( var p = parents[i]; p >= 0; p = parents[p] )
+			{
+				if ( ++steps > count ) { parents[i] = -1; break; } // a loop
+			}
+		}
+		// duplicate names would make the parent links ambiguous: suffix them
+		var seen = new HashSet<string>( StringComparer.Ordinal );
+		for ( var i = 0; i < count; i++ )
+		{
+			var n = string.IsNullOrEmpty( names[i] ) ? $"bone_{i}" : names[i];
+			for ( var k = 1; !seen.Add( n ); k++ ) n = $"{names[i]}_{k}";
+			names[i] = n;
+		}
+		var defs = new List<BoneDefinition>( count );
+		for ( var i = 0; i < count; i++ )
+		{
+			var p = parents[i];
+			var local = p < 0 ? world[i] : XForm.ToLocal( world[p], world[i] );
+			defs.Add( new BoneDefinition( names[i], p < 0 ? null : names[p], local ) );
 		}
 		return Skeleton.Create( defs );
 	}
