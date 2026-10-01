@@ -689,7 +689,7 @@ public static class EditorGate
 			var a = rig.Analysis;
 			report[creature.Name] = new
 			{
-				bones = rig.Skeleton.Count, humanoid = rig.IsHumanoid, family = Inference.UniMate.UniMateRig.DefaultFamily.ToString(), facing = a.Facing.ToString(),
+				bones = rig.Skeleton.Count, humanoid = rig.IsHumanoid, family = Inference.UniMate.UniMateRig.DetectFamily( rig ).ToString(), facing = a.Facing.ToString(),
 				limbs = a.Limbs.Select( l => $"{l.Kind} {l.Side}: {l.Chain.Count}" ).ToList(), problems = rig.Problems.ToList(),
 			};
 			Set( "creatures", report );

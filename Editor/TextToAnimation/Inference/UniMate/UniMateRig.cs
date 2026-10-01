@@ -69,11 +69,31 @@ public sealed class UniMateRig
 	}
 
 	/// <summary>
-	/// The statistics family for a rig when none is chosen. Upstream normalises with the statistics of the dataset a
-	/// skeleton came from; a new rig comes through upstream's generic asset pipeline (the Objaverse export path this
-	/// port follows), so it gets the Objaverse statistics - whatever kind of creature it is.
+	/// The statistics a rig is normalised with. Upstream normalises every skeleton with the statistics of the dataset
+	/// it came from - people (Mixamo), animals and creatures (Truebones), other objects (Objaverse) - and the
+	/// network's output is only right in that space (a person under the Objaverse statistics never touches the
+	/// ground). A new rig gets the dataset its body resembles.
 	/// </summary>
-	public const RigFamily DefaultFamily = RigFamily.Object;
+	static readonly string[] CreatureWords = { "thigh", "shin", "calf", "leg", "foot", "toe", "paw", "hoof", "wing", "tail" };
+
+	public static RigFamily DetectFamily( MotionRig rig )
+	{
+		var a = rig.Analysis;
+		if ( a.IsHumanoid ) return RigFamily.Humanoid;
+		if ( a.Limbs.Any( l => l.Kind is LimbKind.Leg or LimbKind.FrontLeg or LimbKind.Wing )
+			|| a.Tails.Any( t => t.Count > 0 && a.Part[t[0]] == RigPart.Tail )
+			|| a.Facing == RigFacing.BodyAxis )
+			return RigFamily.Animal;
+		// a rest pose the shape analysis can't read (no mirror plane: a lopsided bind pose) - fall back on upstream's own
+		// joint names: legs, wings or a tail make a creature
+		if ( a.Limbs.Count == 0 )
+		{
+			var objectType = UniMateSkin.ObjectTypeOf( rig.Skeleton );
+			var words = Enumerable.Range( 0, rig.Skeleton.Count ).Select( b => UniMateNames.Clean( rig.Skeleton[b].Name, objectType ).ToLowerInvariant() );
+			if ( words.Any( w => CreatureWords.Any( w.Contains ) ) ) return RigFamily.Animal;
+		}
+		return RigFamily.Object;
+	}
 
 	/// <summary>
 	/// Prepares a rig like upstream prepares its training rigs: pruning helpers by skin weight, clean names and
@@ -104,7 +124,7 @@ public sealed class UniMateRig
 				UniMateSkeleton.EngineCanonicalBasis, bodyAxis: prep.BodyAxis );
 		}
 		catch ( ArgumentException e ) { throw new InvalidOperationException( e.Message, e ); }
-		if ( family == RigFamily.Auto ) family = DefaultFamily;
+		if ( family == RigFamily.Auto ) family = DetectFamily( rig );
 		var bone = skeleton.SourceIndex.Select( i => prep.Kept[i] ).ToArray();
 		return new UniMateRig( rig, skeleton, bone, new Vector3[bone.Length], family ) { Prep = prep };
 	}

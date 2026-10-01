@@ -240,7 +240,9 @@ public class UpstreamPrepTests
 	Chain RunChain( string rig, bool sample = true )
 	{
 		var (motionRig, index) = EngineRig( rig );
-		var uni = UniMateRig.Build( motionRig );
+		// these fixtures check the port's arithmetic stage by stage under one fixed statistics set (Objaverse, on both
+		// sides); which statistics a rig gets is checked against upstream's own sampling in DatasetMotionTests
+		var uni = UniMateRig.Build( motionRig, TextToAnimation.Generation.RigFamily.Object );
 		var z = new UniMateCoreTests.Npz( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep", $"sample_{rig}.npz" ) );
 		var srcRaw = z["src_bone"].Values.Select( v => (int)v ).ToArray();
 		var J = uni.Count;

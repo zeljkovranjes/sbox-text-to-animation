@@ -134,9 +134,13 @@ public sealed class UniMateModel
 
 	/// <summary>Runs the prepare graph for a skeleton (joint names are embedded with T5).</summary>
 	public PreparedSkeleton Prepare( UniMateSkeleton s, UniMateStats stats, CancellationToken token )
+		=> Prepare( s, ConditioningInputs( s, stats, token ), token );
+
+	/// <summary>Runs the prepare graph on given conditioning inputs (see <see cref="ConditioningInputs"/>).</summary>
+	public PreparedSkeleton Prepare( UniMateSkeleton s, Dictionary<string, Tensor> conditioning, CancellationToken token )
 	{
 		var (prepare, _) = Graphs( s.Count, token );
-		var outputs = prepare.Run( ConditioningInputs( s, stats, token ), token );
+		var outputs = prepare.Run( conditioning, token );
 		return new PreparedSkeleton { Skeleton = s, Tensors = outputs };
 	}
 
