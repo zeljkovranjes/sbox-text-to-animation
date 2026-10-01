@@ -1,0 +1,235 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
+using TextToAnimation.Animation;
+using TextToAnimation.Generation;
+using TextToAnimation.Maths;
+using TextToAnimation.Processing;
+using TextToAnimation.Workspace;
+
+namespace TextToAnimation.Editor.Inference.UniMate;
+
+/// <summary>
+/// UniMate behind the editor's <see cref="IMotionGenerator"/> interface. All modes run on 2-second windows
+/// (UniMate's native 60 frames at 30 fps); longer clips are covered by overlapping windows, each one encoded
+/// from the current result so the overlap is held fixed and the root path continues smoothly.
+/// </summary>
+public sealed class UniMateGenerator : IMotionGenerator
+{
+	const int Window = UniMateModel.Frames;
+	const int Overlap = 10;
+	readonly UniMateModel _model;
+	readonly Dictionary<string, (UniMateRig Rig, PreparedSkeleton Prep)> _rigs = new();
+	readonly object _lock = new();
+
+	public UniMateGenerator( UniMateModel model ) => _model = model;
+
+	public string Name => "UniMate";
+
+	public GeneratorCapabilities Capabilities { get; } = new()
+	{
+		Modes = new[] { GenerationMode.TextToMotion, GenerationMode.InBetween, GenerationMode.TextEdit, GenerationMode.Expansion, GenerationMode.Variation },
+		NativeFps = UniMateModel.Fps,
+		MaxSegmentSeconds = Window / UniMateModel.Fps,
+		DefaultSeconds = 2f,
+		DefaultGuidance = 3f,
+	};
+
+	public IReadOnlyList<string> Validate( MotionRig rig ) => UniMateRig.Validate( rig );
+
+	(UniMateRig Rig, PreparedSkeleton Prep) Prepare( MotionRig rig, CancellationToken token )
+	{
+		var key = AnimationWorkspace.Fingerprint( rig.Skeleton ) + rig.Skeleton.RestWorld.Sum( x => x.Pos.X + x.Pos.Y * 3 + x.Pos.Z * 7 ).ToString( "R" );
+		lock ( _lock )
+		{
+			if ( _rigs.TryGetValue( key, out var cached ) ) return cached;
+			var uniRig = UniMateRig.Build( rig );
+			var prep = _model.Prepare( uniRig.Skeleton, UniMateStats.Mixamo, token );
+			return _rigs[key] = (uniRig, prep);
+		}
+	}
+
+	public Task<IReadOnlyList<GeneratedMotion>> GenerateAsync( MotionRig rig, GenerationRequest request,
+		IProgress<GenerationProgress> progress, CancellationToken token )
+		=> Task.Run( () => Generate( rig, request, progress, token ), token );
+
+	IReadOnlyList<GeneratedMotion> Generate( MotionRig rig, GenerationRequest request, IProgress<GenerationProgress> progress, CancellationToken token )
+	{
+		progress?.Report( new GenerationProgress( "Preparing the skeleton", 0f ) );
+		var (uniRig, prep) = Prepare( rig, token );
+		var takes = Math.Max( 1, request.Count );
+		var steps = request.Steps > 0 ? request.Steps : 24;
+		var guidance = request.Guidance > 0 ? request.Guidance : 3f;
+		var results = new List<GeneratedMotion>();
+
+		// source motion at 30 fps (for in-betweening, editing and variations)
+		List<XForm[]> source = null;
+		var pins = new List<int>();
+		if ( request.SourceFrames is { Count: > 1 } src )
+		{
+			var scale = UniMateModel.Fps / Math.Max( 1f, request.SourceFps );
+			var count = Math.Max( 2, (int)MathF.Round( (src.Count - 1) * scale ) + 1 );
+			source = new List<XForm[]>( count );
+			for ( var f = 0; f < count; f++ ) source.Add( ClipOps.Sample( src, f / scale ) );
+			pins = request.KeepFrames.Select( f => (int)MathF.Round( f * scale ) ).Where( f => f >= 0 && f < count ).Distinct().OrderBy( f => f ).ToList();
+		}
+
+		for ( var take = 0; take < takes; take++ )
+		{
+			token.ThrowIfCancellationRequested();
+			var seed = request.Seed + take * 7919;
+			var notes = new List<string>();
+			List<XForm[]> frames;
+			void Report( string stage, float fraction ) => progress?.Report( new GenerationProgress(
+				takes > 1 ? $"{stage} (take {take + 1} of {takes})" : stage, (take + Math.Clamp( fraction, 0, 1 )) / takes ) );
+
+			switch ( request.Mode )
+			{
+				case GenerationMode.TextToMotion:
+				case GenerationMode.Expansion:
+				{
+					var segments = request.Prompts.Where( p => !string.IsNullOrWhiteSpace( p ) ).ToList();
+					if ( request.Mode == GenerationMode.TextToMotion && segments.Count == 1 ) segments = UniMatePrompt.SplitSteps( segments[0] );
+					if ( segments.Count == 0 ) throw new InvalidOperationException( "Describe the motion first." );
+					// a single prompt longer than one window repeats as continuing segments
+					var wanted = request.DurationSeconds > 0 ? request.DurationSeconds : Capabilities.DefaultSeconds;
+					while ( segments.Count * (Window - Overlap) + Overlap < wanted * UniMateModel.Fps && segments.Count < 20 )
+						segments.Add( segments[^1] );
+					frames = Chain( uniRig, prep, segments.Select( UniMatePrompt.ToCaption ).ToList(), seed, steps, guidance, null, null, null, 0f, Report, token );
+					if ( request.Mode == GenerationMode.TextToMotion && wanted > 0 )
+					{
+						var keep = Math.Clamp( (int)MathF.Round( wanted * UniMateModel.Fps ) + 1, 2, frames.Count );
+						frames = frames.GetRange( 0, keep );
+					}
+					break;
+				}
+				case GenerationMode.InBetween:
+				{
+					if ( source is null ) throw new InvalidOperationException( "In-betweening needs an animation with pinned frames." );
+					if ( pins.Count < 2 ) throw new InvalidOperationException( "Pin at least two frames (the poses to keep) on the timeline." );
+					var caption = UniMatePrompt.ToCaption( request.Prompts.FirstOrDefault() ?? "" );
+					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, pins, null, 0f, Report, token, caption );
+					break;
+				}
+				case GenerationMode.TextEdit:
+				{
+					if ( source is null ) throw new InvalidOperationException( "Editing needs an existing animation." );
+					var caption = UniMatePrompt.ToCaption( request.Prompts.FirstOrDefault() ?? "" );
+					if ( caption.Length == 0 ) throw new InvalidOperationException( "Describe the new motion for the unlocked bones." );
+					var keepJoints = uniRig.JointsForBones( request.KeepBones );
+					if ( keepJoints.Count == 0 ) notes.Add( "No bones were locked, so the whole body was regenerated." );
+					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, null, keepJoints, 0f, Report, token, caption );
+					break;
+				}
+				case GenerationMode.Variation:
+				{
+					if ( source is null ) throw new InvalidOperationException( "Variations need an existing animation." );
+					var caption = UniMatePrompt.ToCaption( request.Prompts.FirstOrDefault() ?? "An object moves." );
+					// start part-way along the flow from a noised copy of the source (SDEdit): low strength stays close
+					var t0 = Math.Clamp( 1f - request.VariationStrength, 0.05f, 0.9f );
+					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, null, null, t0, Report, token, caption );
+					break;
+				}
+				default:
+					throw new NotSupportedException( $"{request.Mode} is not supported." );
+			}
+
+			// derived bones: twist helpers follow their limbs
+			TwistBoneFollow.Apply( frames, rig.Rig, null );
+			// back to the workspace frame rate
+			var output = Resample( frames, UniMateModel.Fps, request.OutputFps );
+			results.Add( new GeneratedMotion { Frames = output, Fps = request.OutputFps, Seed = seed, Notes = notes } );
+		}
+		progress?.Report( new GenerationProgress( "Done", 1f ) );
+		return results;
+	}
+
+	/// <summary>
+	/// Generates window after window. Each window is encoded from the current result (source frames, or the
+	/// motion generated so far) and holds: pinned frames, kept joints, and the overlap with the previous window.
+	/// </summary>
+	List<XForm[]> Chain( UniMateRig uniRig, PreparedSkeleton prep, List<string> captions, int seed, int steps, float guidance,
+		List<XForm[]> source, List<int> pins, HashSet<int> keepJoints, float startTime,
+		Action<string, float> report, CancellationToken token, string singleCaption = null )
+	{
+		var J = uniRig.Count;
+		var length = source?.Count ?? (Window + (captions.Count - 1) * (Window - Overlap) + 1);
+		var windows = new List<int>();
+		for ( var s = 0; ; s += Window - Overlap )
+		{
+			windows.Add( s );
+			if ( s + Window >= length - 1 ) break;
+		}
+		var result = source is not null ? AnimClip.CopyFrames( source ) : new List<XForm[]>();
+		var rest = uniRig.Motion.Skeleton.Bones.Select( b => b.RestLocal ).ToArray();
+		for ( var w = 0; w < windows.Count; w++ )
+		{
+			token.ThrowIfCancellationRequested();
+			var start = windows[w];
+			var caption = singleCaption ?? captions[Math.Min( w, captions.Count - 1 )];
+			var embedding = _model.Text.Encode( caption, token );
+			var noise = UniMateModel.Noise( J, seed + w * 104729 );
+			var keep = new bool[J * 12 * Window];
+			var anyKeep = false;
+			void KeepFrame( int f ) { for ( var j = 0; j < J; j++ ) for ( var c = 0; c < 12; c++ ) keep[(j * 12 + c) * Window + f] = true; anyKeep = true; }
+			if ( pins is not null ) foreach ( var p in pins ) if ( p >= start && p < start + Window ) KeepFrame( p - start );
+			if ( keepJoints is not null )
+				foreach ( var j in keepJoints ) for ( var c = 0; c < 12; c++ ) for ( var f = 0; f < Window; f++ ) { keep[(j * 12 + c) * Window + f] = true; anyKeep = true; }
+			if ( w > 0 ) for ( var f = 0; f < Overlap; f++ ) KeepFrame( f );
+
+			float[] known = null;
+			UniMateFeatures.Alignment alignment = null;
+			var needsKnown = anyKeep || startTime > 0;
+			if ( needsKnown )
+			{
+				// T+1 frames of the current result for this window (padded with the last available frame)
+				var span = new List<XForm[]>( Window + 1 );
+				for ( var f = 0; f <= Window; f++ )
+				{
+					var i = Math.Min( start + f, result.Count - 1 );
+					span.Add( result.Count > 0 ? result[Math.Max( 0, i )] : rest );
+				}
+				var (pos, rot) = uniRig.JointWorld( span );
+				var (feat, align) = UniMateFeatures.Encode( pos, rot, uniRig.Skeleton );
+				alignment = align;
+				known = UniMateFeatures.ToModel( feat, UniMateStats.Mixamo, Window );
+			}
+			var settings = new SampleSettings
+			{
+				Steps = steps, Guidance = guidance, StartTime = startTime, Known = known, Keep = anyKeep ? keep : null,
+			};
+			var windowIndex = w;
+			var x = _model.Sample( prep, embedding, noise, settings,
+				f => report( windows.Count > 1 ? $"Generating part {windowIndex + 1} of {windows.Count}" : "Generating", (windowIndex + f) / windows.Count ), token );
+
+			var motion = UniMateFeatures.Decode( UniMateFeatures.FromModel( x, J, Window, UniMateStats.Mixamo ), uniRig.Skeleton.Parents );
+			if ( alignment is not null ) UniMateFeatures.Unalign( motion, alignment );
+			var src = UniMateFeatures.ToSource( motion, uniRig.Skeleton );
+			// bones UniMate doesn't animate (fingers, helpers) keep the source pose
+			var baseFrames = source is not null ? Enumerable.Range( 0, Window ).Select( f => source[Math.Min( start + f, source.Count - 1 )] ).ToList() : null;
+			var generated = uniRig.ToFrames( src, baseFrames );
+			// write the window into the result
+			for ( var f = 0; f < Window; f++ )
+			{
+				var target = start + f;
+				if ( target < result.Count ) result[target] = generated[f];
+				else result.Add( generated[f] );
+			}
+		}
+		if ( source is not null && result.Count > source.Count ) result = result.GetRange( 0, source.Count );
+		return result;
+	}
+
+	static List<XForm[]> Resample( List<XForm[]> frames, float fromFps, float toFps )
+	{
+		if ( MathF.Abs( fromFps - toFps ) < 0.01f || frames.Count < 2 ) return frames;
+		var duration = (frames.Count - 1) / fromFps;
+		var count = Math.Max( 2, (int)MathF.Round( duration * toFps ) + 1 );
+		var result = new List<XForm[]>( count );
+		for ( var f = 0; f < count; f++ ) result.Add( ClipOps.Sample( frames, f * fromFps / toFps ) );
+		return result;
+	}
+}

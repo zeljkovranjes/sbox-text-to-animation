@@ -57,6 +57,9 @@ public sealed class GenerationRequest
 
     /// <summary>Frames shared between consecutive expansion segments.</summary>
     public int ExpansionOverlapFrames { get; init; } = 10;
+
+    /// <summary>Sampling steps (quality vs speed). 0 = model default.</summary>
+    public int Steps { get; init; }
 }
 
 /// <summary>Coarse progress for the UI.</summary>
