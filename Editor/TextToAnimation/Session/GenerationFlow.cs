@@ -159,7 +159,8 @@ public sealed class GenerationFlow
 	/// bones. Empty prompts are dropped; variations and in-betweens fall back to the clip's original prompt.
 	/// </summary>
 	public static GenerationRequest BuildRequest( EditorSession session, GenerationMode mode, IEnumerable<string> prompts,
-		float durationSeconds, int seed, int count, float guidance, int steps, float variationStrength )
+		float durationSeconds, int seed, int count, float guidance, int steps, float variationStrength,
+		IReadOnlyCollection<int> keepBones = null )
 	{
 		var clip = session.ActiveClip;
 		var list = (prompts ?? Enumerable.Empty<string>()).Select( p => (p ?? "").Trim() ).ToList();
@@ -182,7 +183,8 @@ public sealed class GenerationFlow
 			SourceFrames = usesClip ? session.ActiveFrames : null,
 			SourceFps = clip?.Fps ?? 30f,
 			KeepFrames = usesClip ? clip.PinnedFrames.ToList() : new List<int>(),
-			KeepBones = usesClip ? clip.LockedBones.Select( session.Rig.Skeleton.IndexOf ).Where( i => i >= 0 ).ToArray() : Array.Empty<int>(),
+			KeepBones = !usesClip ? Array.Empty<int>()
+				: keepBones?.ToArray() ?? clip.LockedBones.Select( session.Rig.Skeleton.IndexOf ).Where( i => i >= 0 ).ToArray(),
 			VariationStrength = variationStrength,
 		};
 	}

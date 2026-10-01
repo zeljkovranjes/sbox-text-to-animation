@@ -100,7 +100,6 @@ public sealed class AnimationViewport : SceneRenderingWidget
 		GizmoInstance.Input.IsHovered = IsActiveWindow && IsUnderMouse;
 		UpdateGizmoInputs( GizmoInstance.Input.IsHovered );
 
-		_session.Tick( RealTime.Delta );
 		var frames = _session.ActiveFrames;
 		var rig = _session.Rig;
 		if ( rig is null || frames is null || frames.Count == 0 )

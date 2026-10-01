@@ -108,13 +108,15 @@ public static class EditorGate
 		var checks = new Dictionary<string, bool>();
 		void Check( string name, bool ok, string detail = "" ) { checks[name] = ok; Set( "checks", checks ); Note( $"{(ok ? "PASS" : "FAIL")} {name} {detail}" ); }
 
-		// ---- 1. the first page, then "New from Citizen Human": a copy of the stock .vmdl in the project
+		// ---- 1. the start page (drop / choose a VMDL, or start fresh), then "New from Citizen Human":
+		//         a copy of the stock .vmdl in the project, compiled and opened
 		await EngineThread.SwitchToMainThread();
 		var window = TextToAnimationWindow.Open();
-		await EngineThread.DelayOnMain( 300 );
+		await EngineThread.DelayOnMain( 500 );
 		Check( "start page shows first", window.ShowsStartPage && !window.Session.HasModel );
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" ) await EngineThread.DelayOnMain( 5000 );
 		var folder = Path.Combine( assets, "t2a_gate" );
+		Directory.CreateDirectory( folder );
 		var vmdlPath = Path.Combine( folder, "gate_human.vmdl" );
 		var started = Stopwatch.StartNew();
 		await window.CreateFromStarterAsync( StarterModels.CitizenHuman, vmdlPath );
@@ -126,6 +128,7 @@ public static class EditorGate
 		Check( "test model compiles", asset is not null && asset.IsCompiled && window.Session.HasModel, window.Session.ModelAsset?.Path ?? "" );
 		if ( !window.Session.HasModel ) return false;
 		Check( "start page hides once a model is open", !window.ShowsStartPage );
+		Check( "an empty workspace starts with a new-animation prompt", window.EditPrompt.Target is null );
 
 		// ---- 2. the opened model
 		var session = window.Session;
@@ -161,6 +164,7 @@ public static class EditorGate
 		session.UndoEdit(); session.UndoEdit();
 
 		// ---- 5. viewport renders the posed model
+		session.SelectClip( imported );
 		await EngineThread.DelayOnMain( 500 );
 		var shots = Path.Combine( Path.GetDirectoryName( _resultPath )!, "gate_shots" );
 		Directory.CreateDirectory( shots );
@@ -171,18 +175,31 @@ public static class EditorGate
 		}
 		catch ( Exception e ) { Check( "viewport renders", false, e.Message ); }
 
-		// ---- 6. generate with UniMate (if installed on this machine)
+		// ---- 6. generate from the editor's prompt: type a prompt and press Enter
 		GeneratorService.Instance.Refresh();
 		AnimClip generated = null;
 		if ( GeneratorService.Instance.State == ModelState.Ready )
 		{
-			var ok = await window.Flow.GenerateAsync( new GenerationRequest
-			{
-				Mode = GenerationMode.TextToMotion, Prompts = new[] { "walk forward" }, DurationSeconds = 2f, OutputFps = 30f, Seed = 7, Steps = 12,
-			}, replace: false, "Gate walk" );
-			await EngineThread.SwitchToMainThread();
-			generated = session.ActiveClip;
-			Check( "UniMate generates", ok && generated?.Origin == ClipOrigin.Generated, generated?.Name ?? "" );
+			window.SetIntent( UI.EditIntent.New );
+			var composer = window.EditPrompt;
+			composer.Options.Seconds = 2f;
+			composer.Options.Steps = 12;
+			composer.Options.Seed = 7;
+			composer.Options.Takes = 1;
+			composer.Text = "walk forward";
+			var beforeGenerate = session.Workspace.Clips.ToList();
+			composer.Input.Focus();
+			composer.Input.PostKeyEvent( KeyCode.Enter );
+			var enterStarted = await WaitUntil( () => window.Flow.Running, 10 );
+			Check( "Enter in the prompt starts generating", enterStarted );
+			if ( !enterStarted ) composer.Submit();
+			await EngineThread.DelayOnMain( 500 );
+			await WaitUntil( () => !window.Flow.Running && !session.Busy, 600 );
+			await EngineThread.DelayOnMain( 300 );
+			generated = session.Workspace.Clips.Except( beforeGenerate ).FirstOrDefault();
+			Check( "UniMate generates", generated?.Origin == ClipOrigin.Generated, generated?.Name ?? "" );
+			Check( "the result opens in the editor", generated is not null && session.ActiveClip == generated );
+			Check( "the prompt clears after sending", composer.Text.Length == 0 );
 			if ( generated is not null )
 			{
 				var issues = ClipQuality.Analyze( generated, session.Rig );
@@ -192,7 +209,7 @@ public static class EditorGate
 				var travel = RootTools.Horizontal( session.Rig, path[^1] - path[0] );
 				Set( "generatedTravel", travel.ToString() );
 				Check( "generated walk travels forward", System.Numerics.Vector3.Dot( travel, session.Rig.Forward ) > session.Rig.Cm( 30f ), travel.ToString() );
-				await EngineThread.DelayOnMain( 300 );
+				await EngineThread.DelayOnMain( 400 );
 				File.WriteAllBytes( Path.Combine( shots, "viewport_generated.png" ), window.Viewport.RenderToPng() );
 			}
 		}
@@ -278,16 +295,50 @@ public static class EditorGate
 		if ( generated is not null )
 			await RunModeChecksAsync( window, session, generated, Check );
 
-		// ---- 16. showcase for window screenshots (driver -Capture): each tab for a few seconds
+		// ---- 15b. the editor's prompt: "change only the arms" keeps the legs exactly
+		if ( generated is not null )
+		{
+			window.OpenEditor( generated );
+			window.SetIntent( UI.EditIntent.Change );
+			var editPrompt = window.EditPrompt;
+			editPrompt.Options.Scope = UI.ChangeScope.Arms;
+			editPrompt.Options.Steps = 12;
+			editPrompt.Options.Seed = 5;
+			editPrompt.Options.Takes = 1;
+			var beforeEdit = session.Workspace.Clips.ToList();
+			await window.RunEditPromptAsync( "wave with both hands" );
+			await EngineThread.SwitchToMainThread();
+			var armsChanged = session.Workspace.Clips.Except( beforeEdit ).FirstOrDefault();
+			if ( armsChanged is null ) Check( "editor prompt changes only the arms", false, "no result" );
+			else
+			{
+				var rig = session.Rig;
+				var legs = Enumerable.Range( 0, rig.Skeleton.Count ).Where( b => rig.IsMotionBone( b ) && rig.RegionOf( b ) is BodyRegion.LegL or BodyRegion.LegR ).ToList();
+				var arms = Enumerable.Range( 0, rig.Skeleton.Count ).Where( b => rig.IsMotionBone( b ) && rig.RegionOf( b ) is BodyRegion.ArmL or BodyRegion.ArmR ).ToList();
+				var source = generated.EvaluateFrames( rig.Skeleton );
+				float Max( IEnumerable<int> bones )
+				{
+					var worst = 0f;
+					for ( var f = 0; f < Math.Min( source.Count, armsChanged.FrameCount ); f++ )
+						foreach ( var b in bones ) worst = MathF.Max( worst, Maths.MathQ.AngleBetween( source[f][b].Rot, armsChanged.Frames[f][b].Rot ) );
+					return worst * 180f / MathF.PI;
+				}
+				var legError = Max( legs );
+				var armChange = Max( arms );
+				Check( "editor prompt changes only the arms", legs.Count > 4 && legError < 0.01f && armChange > 5f, $"legs {legError:0.0000}°, arms {armChange:0.0}°" );
+			}
+		}
+
+		// ---- 16. showcase for window screenshots (driver -Capture): each editor tab
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" )
 		{
 			session.SelectClip( generated ?? imported );
 			session.SelectBone( session.Rig.Skeleton.IndexOf( "arm_upper_R" ) );
 			session.Playing = true;
-			foreach ( var tab in new[] { 0, 1, 2, 3, 0 } )
+			foreach ( var tab in new[] { 0, 1, 2 } )
 			{
 				window.ShowTab( tab );
-				Note( $"showcase tab {tab}" );
+				Note( $"showcase editor tab {tab}" );
 				await EngineThread.DelayOnMain( 4000 );
 			}
 		}

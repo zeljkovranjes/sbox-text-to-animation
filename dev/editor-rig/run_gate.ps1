@@ -52,7 +52,7 @@ if (-not (Test-Path $libDir)) { New-Item -ItemType Junction -Path $libDir -Value
 # fresh state: previous outputs, workspaces and backups of the scratch project
 Remove-Item $resultPath -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $PSScriptRoot "gate_shots") -Recurse -Force -ErrorAction SilentlyContinue
-foreach ($d in "Assets\t2a_gate", "Assets\t2a_gate_export", "text_to_animation") {
+foreach ($d in "Assets\t2a_gate", "Assets\t2a_gate_export", "Assets\models", "text_to_animation") {
     $p = Join-Path $scratch $d; if (Test-Path $p) { Remove-Item -Recurse -Force $p }
 }
 Set-Content -Path "$resultPath.arm" -Value (Get-Date -Format o) -Encoding ascii

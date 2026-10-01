@@ -30,19 +30,18 @@ public sealed class SavePanel : Widget
 		Layout = Layout.Column();
 		Layout.Spacing = 8;
 
-		var card = Layout.Add( new TaCard( this ) );
-		card.Header( "save", "Save to model" ).AddStretchCell();
-		var seqRow = TaStyle.FieldRow( card, card.Layout, "Sequence", 80f, "The animation's name inside the model (what the animgraph and code use)" );
+		var card = Layout.Add( new TaFold( this, "save", "Save to model", open: true, key: "save.card" ) );
+		var seqRow = TaStyle.FieldRow( card, card.Content, "Sequence", 80f, "The animation's name inside the model (what the animgraph and code use)" );
 		_sequence = seqRow.Add( TaStyle.Field( new LineEdit( card ) ), 1 );
 		_sequence.EditingFinished += () => Change( "Sequence name", c => c.Export.SequenceName = AnimClip.SanitizeSequenceName( _sequence.Text ) );
 
-		var rootRow = TaStyle.FieldRow( card, card.Layout, "Root motion", 80f, "How travel is stored in the saved sequence" );
+		var rootRow = TaStyle.FieldRow( card, card.Content, "Root motion", 80f, "How travel is stored in the saved sequence" );
 		_root = rootRow.Add( TaStyle.Field( new ComboBox( card ) ), 1 );
 		_root.AddItem( "Keep (moves in the animation)", "open_with", () => Change( "Root motion: keep", c => c.Export.RootMotion = ClipRootMotion.Keep ) );
 		_root.AddItem( "Extract (drives the character)", "moving", () => Change( "Root motion: extract", c => c.Export.RootMotion = ClipRootMotion.Extract ) );
 		_root.AddItem( "In place (no travel)", "my_location", () => Change( "Root motion: in place", c => c.Export.RootMotion = ClipRootMotion.InPlace ) );
 
-		var extras = card.Layout.AddColumn();
+		var extras = card.Content.AddColumn();
 		extras.Spacing = 4;
 		_footsteps = TaStyle.Check( extras, "Footstep events", true, v => Change( "Footsteps", c => c.Export.Footsteps = v ), "Save AE_FOOTSTEP events (footstep sounds)" );
 		var addRow = extras.AddRow();
@@ -53,8 +52,8 @@ public sealed class SavePanel : Widget
 		addRow.AddStretchCell();
 		_mirrored = TaStyle.Check( extras, "Mirrored copy (left/right swapped)", false, v => Change( "Mirrored copy", c => c.Export.MirroredVariant = v ), "Also save <name>_mirror" );
 
-		_summary = card.Layout.Add( TaStyle.Muted( new Label( "", card ) { WordWrap = true }, small: true ) );
-		var buttons = card.Layout.AddRow();
+		_summary = card.Content.Add( TaStyle.Muted( new Label( "", card ) { WordWrap = true }, small: true ) );
+		var buttons = card.Content.AddRow();
 		buttons.Spacing = 6;
 		buttons.Add( new TaButton( card, "Replace…", "swap_horiz", () => ReplaceExisting?.Invoke(), "Overwrite one of the model's existing animations with this one", 30 ) );
 		buttons.Add( new TaButton( card, "Export…", "file_download", () => ExportFiles?.Invoke(), "Write the animation as a .dmx file (and a ready-to-use .vmdl)", 30 ) );

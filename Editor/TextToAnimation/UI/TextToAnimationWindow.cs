@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -12,9 +13,9 @@ using TextToAnimation.Editor.Session;
 namespace TextToAnimation.Editor.UI;
 
 /// <summary>
-/// The Text to Animation editor: pick a model, then create, import, generate and edit its animations and save
-/// them back into the model. Left: the model's animations. Center: the live model and the timeline. Right:
-/// Generate / Edit / Pose / Save. The main actions are always in the top bar.
+/// Text to Animation. First a start page (drop or choose a .vmdl, or start fresh from a copy of an s&amp;box
+/// character); then the editor: the animations on the left, the model, a prominent prompt and the timeline in
+/// the middle, and the Edit / Pose / Export tools down the whole right side.
 /// </summary>
 public sealed class TextToAnimationWindow : Widget
 {
@@ -27,34 +28,43 @@ public sealed class TextToAnimationWindow : Widget
 	public EditorSession Session { get; } = new();
 	public GenerationFlow Flow { get; }
 	public SaveFlow Save { get; }
+	// first page
+	StartPage _start;
+	ProcessingIndicator _firstLoad;
+	string _starting;
+	Widget _main;
 
-	// layout
-	Button _modelButton;
-	Label _modelPath;
+	// top bar
+	TaButton _modelButton;
+	Widget _editorActions;
 	IconButton _undo, _redo;
-	Button _newButton, _saveButton;
-	TaButton _importButton, _replaceButton, _exportButton;
+	Button _saveButton;
+	TaButton _moreButton;
+
+	// editor page
 	ClipListPanel _clips;
-	TaCard _viewCard;
 	Label _clipTitle;
 	TaPill _clipPill;
 	Widget _viewHost;
 	public AnimationViewport Viewport { get; private set; }
 	ProcessingIndicator _indicator;
-	Widget _main;
-	StartPage _start;
-	ProcessingIndicator _firstLoad;
-	string _starting;
 	TimelineWidget _timeline;
 	IconButton _play, _loop;
 	Label _time;
 	ComboBox _speed;
-	SegmentedControl _tabs;
+	PromptComposer _editPrompt;
+	ChipButton _intentChip;
+	EditIntent _intent = EditIntent.Change;
+	TaTabBar _sideTabs;
 	Widget[] _panels;
-	public GeneratePanel GeneratePanel { get; private set; }
 	public EditPanel EditPanel { get; private set; }
 	public PosePanel PosePanel { get; private set; }
 	public SavePanel SavePanel { get; private set; }
+
+	DownloadStrip _editorDownload;
+
+	// status
+	Widget _statusStrip;
 	TaStatusDot _statusDot;
 	Label _status;
 	TaButton _cancel;
@@ -73,14 +83,14 @@ public sealed class TextToAnimationWindow : Widget
 		Layout = Layout.Column();
 		Layout.Margin = 10;
 		Layout.Spacing = 8;
-		// the first page (the Weapon Importer's): drop area + loader, until a model is open
+
 		_start = Layout.Add( new StartPage( this, paths => _ = OpenModelPathAsync( paths[0] ), PickModel, ChooseFromDisk,
-			() => _ = NewFromStarterAsync( StarterModels.Citizen ), () => _ = NewFromStarterAsync( StarterModels.CitizenHuman ) ), 1 );
+			() => _ = NewFromStarterAsync( StarterModels.Citizen ), () => _ = NewFromStarterAsync( StarterModels.CitizenHuman ), Flow ), 1 );
 		_firstLoad = Layout.Add( new ProcessingIndicator( this ) { Visible = false }, 1 );
 		_main = Layout.Add( new Widget( this ) { Layout = Layout.Column(), Visible = false }, 1 );
 		_main.Layout.Spacing = 8;
 		BuildTopBar();
-		BuildBody();
+		BuildEditor();
 		BuildStatus();
 
 		Session.Changed += OnSessionChanged;
@@ -111,7 +121,7 @@ public sealed class TextToAnimationWindow : Widget
 		option.Triggered = () => Open();
 	}
 
-	/// <summary>Opens (or raises) the editor as a floating window.</summary>
+	/// <summary>Opens (or raises) the tool as a floating window.</summary>
 	public static TextToAnimationWindow Open()
 	{
 		if ( Instance is { } existing )
@@ -155,52 +165,56 @@ public sealed class TextToAnimationWindow : Widget
 	{
 		var bar = _main.Layout.AddRow();
 		bar.Spacing = 8;
-		_modelButton = bar.Add( new Button( "Choose model…", "view_in_ar" ) { FixedHeight = 30, MinimumWidth = 200, ToolTip = "The model (.vmdl) whose animations you're working on" } );
-		_modelButton.Clicked = ShowModelMenu;
-		_modelPath = bar.Add( TaStyle.Muted( new Label( "", this ) { FixedHeight = 30 }, small: true ), 1 );
-		_undo = bar.Add( TaStyle.Icon( this, "undo", Session.UndoEdit, "Undo (Ctrl+Z)", 30 ) );
-		_redo = bar.Add( TaStyle.Icon( this, "redo", Session.RedoEdit, "Redo (Ctrl+Y)", 30 ) );
-		bar.AddSpacingCell( 8 );
-		_newButton = bar.Add( new Button.Primary( "New Animation" ) { Icon = "add", Tint = TaStyle.Accent, FixedHeight = 30, ToolTip = "Start a new animation (then describe it in Generate)" } );
-		_newButton.Clicked = NewAnimation;
-		_importButton = bar.Add( new TaButton( this, "Import Existing", "download", ImportExisting, "Bring in an animation the model already has (or one from another model)", 30 ) );
-		bar.AddSpacingCell( 8 );
-		_replaceButton = bar.Add( new TaButton( this, "Replace Existing", "swap_horiz", ReplaceExisting, "Overwrite one of the model's animations with the open one", 30 ) );
-		_exportButton = bar.Add( new TaButton( this, "Export", "file_download", ExportClip, "Write the open animation as a .dmx file", 30 ) );
-		_saveButton = bar.Add( new Button.Primary( "Save to VMDL" ) { Icon = "save", Tint = TaStyle.Accent, FixedHeight = 30, ToolTip = "Save the open animation into the model (Ctrl+S)" } );
+		_modelButton = bar.Add( new TaButton( this, "No character", "view_in_ar", ShowModelMenu, "The model (.vmdl) you're animating - click to switch", 30 ) );
+		bar.AddStretchCell();
+
+		_editorActions = bar.Add( new Widget( this ) { Layout = Layout.Row() } );
+		_editorActions.Layout.Spacing = 6;
+		_undo = _editorActions.Layout.Add( TaStyle.Icon( _editorActions, "undo", Session.UndoEdit, "Undo (Ctrl+Z)", 30 ) );
+		_redo = _editorActions.Layout.Add( TaStyle.Icon( _editorActions, "redo", Session.RedoEdit, "Redo (Ctrl+Y)", 30 ) );
+		_moreButton = _editorActions.Layout.Add( new TaButton( _editorActions, "More", "more_horiz", ShowMoreMenu, "New, import, replace, export", 30 ) );
+		_saveButton = _editorActions.Layout.Add( new Button.Primary( "Save to VMDL" ) { Icon = "save", Tint = TaStyle.Accent, FixedHeight = 30, ToolTip = "Save the open animation into the model (Ctrl+S)" } );
 		_saveButton.Clicked = () => _ = Save.SaveAsync( Session.ActiveClip );
 	}
 
-	void BuildBody()
+	void BuildEditor()
 	{
 		var body = _main.Layout.AddRow( 1 );
 		body.Spacing = 8;
 
 		_clips = body.Add( new ClipListPanel( this, Session ) { FixedWidth = 250 } );
-		_clips.NewClip = NewAnimation;
+		_clips.NewClip = () => { SetIntent( EditIntent.New ); _editPrompt.FocusPrompt(); };
 		_clips.ImportExisting = ImportExisting;
 		_clips.SaveClip = c => _ = Save.SaveAsync( c );
 		_clips.ExportClip = c => { Session.SelectClip( c ); ExportClip(); };
 
 		var center = body.AddColumn( 1 );
 		center.Spacing = 8;
-		_viewCard = center.Add( new TaCard( this ), 1 );
-		var vh = _viewCard.Header( "accessibility_new", "" );
-		_clipTitle = vh.Add( new Label( "", _viewCard ) );
+		var viewCard = center.Add( new TaCard( this ), 1 );
+		var vh = viewCard.Header( "accessibility_new", "" );
+		_clipTitle = vh.Add( new Label( "", viewCard ) );
 		_clipTitle.SetStyles( "font-weight: 600;" );
-		_clipPill = vh.Add( new TaPill( _viewCard, "", TaStyle.Accent ) );
+		_clipPill = vh.Add( new TaPill( viewCard, "", TaStyle.Accent ) );
 		vh.AddStretchCell();
-		vh.Add( TaStyle.Toggle( _viewCard, "accessibility", true, on => { if ( Viewport is not null ) Viewport.ShowModel = on; }, "Show the model" ) );
-		vh.Add( TaStyle.Toggle( _viewCard, "polyline", true, on => { if ( Viewport is not null ) Viewport.ShowSkeleton = on; }, "Show bones (amber = locked)" ) );
-		vh.Add( TaStyle.Toggle( _viewCard, "route", true, on => { if ( Viewport is not null ) Viewport.ShowTrajectory = on; }, "Show the root path" ) );
-		vh.Add( TaStyle.Toggle( _viewCard, "grid_on", true, on => { if ( Viewport is not null ) Viewport.ShowGround = on; }, "Show the floor" ) );
-		vh.Add( TaStyle.Toggle( _viewCard, "videocam", true, on => { if ( Viewport is not null ) Viewport.FollowCharacter = on; }, "Camera follows the character" ) );
-		vh.Add( TaStyle.Icon( _viewCard, "center_focus_strong", () => Viewport?.FrameCharacter(), "Frame the character (double click the view)" ) );
-
-		_viewHost = _viewCard.Layout.Add( new Widget( _viewCard ) { Layout = Layout.Column() }, 1 );
+		vh.Add( TaStyle.Toggle( viewCard, "accessibility", true, on => Viewport.ShowModel = on, "Show the model" ) );
+		vh.Add( TaStyle.Toggle( viewCard, "polyline", true, on => Viewport.ShowSkeleton = on, "Show bones (amber = locked)" ) );
+		vh.Add( TaStyle.Toggle( viewCard, "route", true, on => Viewport.ShowTrajectory = on, "Show the root path" ) );
+		vh.Add( TaStyle.Toggle( viewCard, "grid_on", true, on => Viewport.ShowGround = on, "Show the floor" ) );
+		vh.Add( TaStyle.Toggle( viewCard, "videocam", true, on => Viewport.FollowCharacter = on, "Camera follows the character" ) );
+		vh.Add( TaStyle.Icon( viewCard, "center_focus_strong", () => Viewport.FrameCharacter(), "Frame the character (double click the view)" ) );
+		_viewHost = viewCard.Layout.Add( new Widget( viewCard ) { Layout = Layout.Column() }, 1 );
 		Viewport = _viewHost.Layout.Add( new AnimationViewport( _viewHost, Session ), 1 );
 		_indicator = _viewHost.Layout.Add( new ProcessingIndicator( _viewHost ), 1 );
 		_indicator.Visible = false;
+
+		// the prompt: describe a new animation or a change to the open one
+		_editorDownload = center.Add( new DownloadStrip( this, Flow ) );
+		_editPrompt = center.Add( new PromptComposer( this, "Describe a change…" ) { FixedHeight = 112 } );
+		_editPrompt.ShowLength = false;
+		_editPrompt.Submitted = prompt => _ = RunEditPromptAsync( prompt );
+		_editPrompt.StopRequested = () => Flow.Cancel();
+		_editPrompt.TargetCleared = () => SetIntent( EditIntent.New );
+		_intentChip = _editPrompt.AddChip( PromptRequests.IntentName( _intent ), "bolt", ShowIntentMenu, "What the prompt does" );
 
 		// timeline + transport
 		var timelineCard = center.Add( new TaCard( this ) { FixedHeight = 132 } );
@@ -219,52 +233,66 @@ public sealed class TextToAnimationWindow : Widget
 			_speed.AddItem( $"{speed:0.##}x", null, () => Session.PlaybackSpeed = speed, selected: speed == 1f );
 		}
 		_time = transport.Add( TaStyle.Muted( new Label( "", timelineCard ) ), 1 );
-		transport.Add( TaStyle.Muted( new Label( "Shift+drag: select · double click Pinned: pin · right click: more", timelineCard ), small: true ) );
+		transport.Add( TaStyle.Icon( timelineCard, "help_outline", () => { }, "Timeline: Shift+drag selects frames · double click the Pinned lane pins a pose · right click for more" ) );
 		_timeline = timelineCard.Layout.Add( new TimelineWidget( timelineCard, Session ), 1 );
 		_timeline.BuildContextMenu = BuildTimelineMenu;
 
-		// right panels
+		// right: the tools, full height
 		var side = body.AddColumn();
 		side.Spacing = 8;
-		_tabs = side.Add( new SegmentedControl( this ) { FixedHeight = 30, FixedWidth = 360 } );
-		_tabs.AddOption( "Generate", "auto_awesome" );
-		_tabs.AddOption( "Edit", "content_cut" );
-		_tabs.AddOption( "Pose", "accessibility_new" );
-		_tabs.AddOption( "Save", "save" );
-		_tabs.OnSelectedChanged = _ => ShowTab( _tabs.SelectedIndex );
-		var scroll = side.Add( new ScrollArea( this ) { FixedWidth = 360 }, 1 );
+		_sideTabs = side.Add( new TaTabBar( this, 32 ) { FixedWidth = 380, Stretch = true } );
+		_sideTabs.Add( "Edit", "content_cut", "Trim, speed, loop, root motion, clean up" );
+		_sideTabs.Add( "Pose", "accessibility_new", "Select bones, pose them, lock them" );
+		_sideTabs.Add( "Export", "save", "How the animation is saved into the model" );
+		_sideTabs.SelectedChanged = ShowTab;
+		var scroll = side.Add( new ScrollArea( this ) { FixedWidth = 380 }, 1 );
 		scroll.HorizontalScrollbarMode = ScrollbarMode.Off;
 		scroll.SetStyles( "background-color: transparent;" );
 		var canvas = new Widget( scroll ) { Layout = Layout.Column() };
 		canvas.Layout.Margin = new Sandbox.UI.Margin( 0, 0, 10, 0 );
 		canvas.SetStyles( "background-color: transparent;" );
 		scroll.Canvas = canvas;
-		GeneratePanel = canvas.Layout.Add( new GeneratePanel( canvas, Session, Flow ) );
 		EditPanel = canvas.Layout.Add( new EditPanel( canvas, Session ) );
 		PosePanel = canvas.Layout.Add( new PosePanel( canvas, Session ) );
 		SavePanel = canvas.Layout.Add( new SavePanel( canvas, Session, Save ) { ReplaceExisting = ReplaceExisting, ExportFiles = ExportClip } );
 		canvas.Layout.AddStretchCell();
-		_panels = new Widget[] { GeneratePanel, EditPanel, PosePanel, SavePanel };
+		_panels = new Widget[] { EditPanel, PosePanel, SavePanel };
 		ShowTab( 0 );
 	}
 
 	void BuildStatus()
 	{
-		var strip = Layout.AddRow();
-		strip.Spacing = 8;
-		_statusDot = strip.Add( new TaStatusDot( this ) );
-		_status = strip.Add( new Label( "", this ) { FixedHeight = 24 }, 1 );
-		_cancel = strip.Add( new TaButton( this, "Cancel", "close", () => Flow.Cancel(), "Stop the download or generation", 24 ) );
+		_statusStrip = Layout.Add( new Widget( this ) { Layout = Layout.Row() } );
+		_statusStrip.Layout.Spacing = 8;
+		_statusDot = _statusStrip.Layout.Add( new TaStatusDot( _statusStrip ) );
+		_status = _statusStrip.Layout.Add( new Label( "", _statusStrip ) { FixedHeight = 24 }, 1 );
+		_cancel = _statusStrip.Layout.Add( new TaButton( _statusStrip, "Cancel", "close", () => Flow.Cancel(), "Stop the download or generation", 24 ) );
 		_cancel.Visible = false;
 	}
 
-	public void ShowTab( int index )
+	// ------------------------------------------------------------------ pages
+
+	/// <summary>True while the first page (no model open) is showing.</summary>
+	public bool ShowsStartPage => _start.Visible;
+
+	/// <summary>The editor's prompt.</summary>
+	public PromptComposer EditPrompt => _editPrompt;
+
+	/// <summary>Opens <paramref name="clip"/> in the editor page.</summary>
+	public void OpenEditor( AnimClip clip )
 	{
-		for ( var i = 0; i < _panels.Length; i++ ) _panels[i].Visible = i == index;
-		if ( _tabs.SelectedIndex != index ) _tabs.SelectedIndex = index;
+		if ( clip is not null ) Session.SelectClip( clip );
 	}
 
-	// ------------------------------------------------------------------ actions
+	/// <summary>Editor side tabs: 0 Edit, 1 Pose, 2 Export.</summary>
+	public void ShowTab( int index )
+	{
+		index = Math.Clamp( index, 0, _panels.Length - 1 );
+		for ( var i = 0; i < _panels.Length; i++ ) _panels[i].Visible = i == index;
+		if ( _sideTabs.SelectedIndex != index ) _sideTabs.SelectedIndex = index;
+	}
+
+	// ------------------------------------------------------------------ model
 
 	void ShowModelMenu()
 	{
@@ -287,14 +315,8 @@ public sealed class TextToAnimationWindow : Widget
 
 	async Task OpenModelPathAsync( string path )
 	{
-		if ( !StarterModels.IsInProject( path ) && AssetSystem.FindByPath( path ) is null )
-		{
-			await ImportOutsideModelAsync( path );
-			return;
-		}
-		var asset = AssetSystem.FindByPath( path );
-		if ( asset is null ) { SetStatus( $"{Path.GetFileName( path )} isn't a model in this project.", Tone.Red ); return; }
-		await OpenModelAsync( asset );
+		if ( AssetSystem.FindByPath( path ) is { } asset ) { await OpenModelAsync( asset ); return; }
+		await RunStartingAsync( $"Copying {Path.GetFileName( path )} into the project", () => StarterModels.CopyIntoProjectAsync( path ) );
 	}
 
 	/// <summary>Picks a .vmdl anywhere on disk; files outside the project are copied in first.</summary>
@@ -302,16 +324,6 @@ public sealed class TextToAnimationWindow : Widget
 	{
 		var path = EditorUtility.OpenFileDialog( "Open model", "Models (*.vmdl)", null );
 		if ( !string.IsNullOrEmpty( path ) ) _ = OpenModelPathAsync( path );
-	}
-
-	async Task ImportOutsideModelAsync( string path )
-	{
-		await RunStartingAsync( $"Copying {Path.GetFileName( path )} into the project", async () =>
-		{
-			var result = await StarterModels.CopyIntoProjectAsync( path );
-			await EngineThread.SwitchToMainThread();
-			return result;
-		} );
 	}
 
 	/// <summary>Start fresh: copies a stock character's .vmdl into the project, compiles it and opens it.</summary>
@@ -325,15 +337,12 @@ public sealed class TextToAnimationWindow : Widget
 		await CreateFromStarterAsync( starter, target );
 	}
 
-	/// <summary>Copies <paramref name="starter"/> to <paramref name="target"/>, compiles and opens it.</summary>
+	/// <summary>Copies <paramref name="starter"/> to <paramref name="target"/> (in the project), compiles and opens it.</summary>
 	public async Task CreateFromStarterAsync( StarterModel starter, string target )
 	{
 		if ( !StarterModels.IsInProject( target ) ) { SetStatus( "Save the new model inside this project's Assets folder.", Tone.Red ); return; }
 		await RunStartingAsync( $"Creating {Path.GetFileName( target )} from {starter.Title}", () => StarterModels.CreateFromStarterAsync( starter, target ) );
 	}
-
-	/// <summary>True while the first page (no model open) is showing.</summary>
-	public bool ShowsStartPage => _start.Visible;
 
 	/// <summary>Shows the first-load indicator while a model is copied and compiled, then opens it.</summary>
 	async Task RunStartingAsync( string message, Func<Task<VmdlCompiler.CompileResult>> work )
@@ -363,31 +372,112 @@ public sealed class TextToAnimationWindow : Widget
 		}
 	}
 
-	public async Task OpenModelAsync( Asset asset )
+	/// <summary>Opens a model's workspace. Returns an error message, or null.</summary>
+	public async Task<string> OpenModelAsync( Asset asset )
 	{
-		if ( Session.Busy ) return;
-		SetStatus( $"Opening {asset.Name}…", Tone.Accent );
+		if ( Session.Busy ) return "Busy - try again in a moment.";
 		var error = await Session.OpenModelAsync( asset );
 		await EngineThread.SwitchToMainThread();
-		if ( error is not null ) { SetStatus( error, Tone.Red ); return; }
+		if ( error is not null ) { SetStatus( error, Tone.Red ); return error; }
 		Viewport.SetModel( Session.Model );
 		var warnings = Session.LoadWarnings.Concat( Session.Rig.Problems ).ToList();
+		SetIntent( Session.Workspace.Clips.Count == 0 ? EditIntent.New : EditIntent.Change );
 		SetStatus( warnings.Count > 0 ? string.Join( " ", warnings )
-			: Session.Workspace.Clips.Count == 0 ? $"{asset.Name} is ready. Describe an animation in Generate, or Import Existing."
+			: Session.Workspace.Clips.Count == 0 ? $"{asset.Name} is ready. Describe an animation in the prompt, or import one with More > Import existing."
 			: $"Opened {asset.Name} with {Session.Workspace.Clips.Count} animations.", warnings.Count > 0 ? Tone.Amber : Tone.Accent );
+		RefreshAll();
+		return null;
 	}
 
-	void NewAnimation()
+	// ------------------------------------------------------------------ editor prompt
+
+	void ShowIntentMenu()
 	{
-		if ( !Session.HasModel ) { PickModel(); return; }
-		Session.NewEmptyClip();
-		ShowTab( 0 );
-		SetStatus( "New animation: describe it in Generate (or import one and edit it).", Tone.Accent );
+		var menu = new Menu( this );
+		var clip = Session.ActiveClip;
+		void Option( EditIntent intent, string tip, bool enabled )
+		{
+			var o = menu.AddOption( PromptRequests.IntentName( intent ), _intent == intent ? "check" : null, () => SetIntent( intent ) );
+			o.Enabled = enabled;
+			o.ToolTip = tip;
+		}
+		Option( EditIntent.Change, "Regenerate the chosen body part from the prompt; the rest keeps its motion", clip is not null );
+		Option( EditIntent.FillBetween, clip is null || clip.PinnedFrames.Count < 2 ? "Pin at least two frames on the timeline first" : $"Keep the {clip.PinnedFrames.Count} pinned poses and regenerate the motion between them", clip?.PinnedFrames.Count >= 2 );
+		Option( EditIntent.Variations, "New takes of this animation", clip is not null );
+		Option( EditIntent.New, "A new animation from the prompt", true );
+		menu.OpenAtCursor();
+	}
+
+	public void SetIntent( EditIntent intent )
+	{
+		_intent = intent;
+		RefreshEditPrompt();
+	}
+
+	void RefreshEditPrompt()
+	{
+		var clip = Session.ActiveClip;
+		var intent = clip is null ? EditIntent.New : _intent;
+		_intentChip.Text = PromptRequests.IntentName( intent );
+		_editPrompt.ShowLength = intent == EditIntent.New;
+		_editPrompt.AllowEmpty = intent is EditIntent.FillBetween or EditIntent.Variations;
+		_editPrompt.SetTarget( intent == EditIntent.Change ? clip?.Name : null );
+		var scopes = new List<ChangeScope> { ChangeScope.WholeBody };
+		if ( Session.Rig?.IsHumanoid == true ) scopes.AddRange( new[] { ChangeScope.UpperBody, ChangeScope.LowerBody, ChangeScope.Arms } );
+		scopes.Add( ChangeScope.SelectedBones );
+		if ( clip?.LockedBones.Count > 0 ) scopes.Add( ChangeScope.Unlocked );
+		_editPrompt.ScopeChoices = scopes;
+		_editPrompt.ShowScope = true;
+		if ( !scopes.Contains( _editPrompt.Options.Scope ) ) _editPrompt.Options.Scope = ChangeScope.WholeBody;
+		_editPrompt.RefreshOptions();
+		_editPrompt.Placeholder = intent switch
+		{
+			EditIntent.FillBetween => "Optional: describe the motion between the pinned poses…",
+			EditIntent.Variations => "Optional: steer the variations…",
+			EditIntent.New => "Describe a new animation…",
+			_ => "Describe a change…",
+		};
+		string reason = null;
+		if ( GeneratorService.Instance.State is not (ModelState.Ready or ModelState.Loading) ) reason = "Download the UniMate model on the Create page first.";
+		else if ( !Session.HasModel ) reason = "Choose a character first.";
+		_editPrompt.SetDisabledReason( reason );
+		_editPrompt.Busy = Flow.Running;
+	}
+
+	public async Task RunEditPromptAsync( string prompt )
+	{
+		if ( Flow.Running || !Session.HasModel ) return;
+		var clip = Session.ActiveClip;
+		var intent = clip is null ? EditIntent.New : _intent;
+		if ( _editPrompt.Options.Scope == ChangeScope.SelectedBones && Session.SelectedBones.Count == 0 && intent == EditIntent.Change )
+		{
+			SetStatus( "Select the bones to change in the view first (Pose tab).", Tone.Amber );
+			return;
+		}
+		var (request, name) = PromptRequests.Build( Session, prompt, _editPrompt.Options, clip, intent );
+		if ( GenerationFlow.Validate( request ) is { } problem ) { SetStatus( problem, Tone.Amber ); return; }
+		_editPrompt.Text = "";
+		await Flow.GenerateAsync( request, replace: false, name );
+	}
+
+	// ------------------------------------------------------------------ editor actions
+
+	void ShowMoreMenu()
+	{
+		var menu = new Menu( this );
+		var clip = Session.ActiveClip;
+		menu.AddOption( "New empty animation", "add", () => Session.NewEmptyClip() ).Enabled = Session.HasModel;
+		menu.AddOption( "Import existing…", "download", ImportExisting ).Enabled = Session.HasModel;
+		menu.AddOption( "Duplicate", "content_copy", () => Session.Duplicate( clip ) ).Enabled = clip is not null;
+		menu.AddSeparator();
+		menu.AddOption( "Replace existing in model…", "swap_horiz", ReplaceExisting ).Enabled = clip is not null;
+		menu.AddOption( "Export .dmx…", "file_download", ExportClip ).Enabled = clip is not null;
+		menu.OpenAtCursor();
 	}
 
 	void ImportExisting()
 	{
-		if ( !Session.HasModel ) { PickModel(); return; }
+		if ( !Session.HasModel ) return;
 		new ImportDialog( this, Session ).Show();
 	}
 
@@ -429,10 +519,10 @@ public sealed class TextToAnimationWindow : Widget
 		if ( clip is null ) return;
 		menu.AddOption( "Go to this frame", "my_location", () => Session.Seek( frame ) );
 		menu.AddOption( clip.PinnedFrames.Contains( frame ) ? "Unpin this frame" : "Pin this frame", "push_pin", () => _timeline.TogglePin( frame ) );
-		menu.AddOption( "Key selected bones here", "key", () => { Session.Seek( frame ); PosePanelAddKey(); } );
+		menu.AddOption( "Key selected bones here", "key", () => { Session.Seek( frame ); AddKey(); } );
 		menu.AddOption( "Delete keys here", "key_off", () => Session.Edit( $"Delete keys at {frame}", c => c.Keys.RemoveKeysAt( frame ) ) );
 		menu.AddSeparator();
-		menu.AddOption( "Split here", "call_split", () => { Session.Seek( frame ); ShowTab( 1 ); } );
+		menu.AddOption( "Split here", "call_split", () => { Session.Seek( frame ); ShowTab( 0 ); } );
 		if ( Session.Range is { } r )
 		{
 			menu.AddOption( "Keep only the selection", "crop", () => Session.Edit( "Trim to selection", c => ClipOps.Crop( c, Session.Rig, r.Start, r.End ) ) );
@@ -444,7 +534,7 @@ public sealed class TextToAnimationWindow : Widget
 		menu.AddOption( "Zoom to fit", "fit_screen", _timeline.ResetZoom );
 	}
 
-	void PosePanelAddKey()
+	void AddKey()
 	{
 		if ( Session.SelectedBones.Count == 0 ) { SetStatus( "Select bones first.", Tone.Amber ); return; }
 		var frame = Session.CurrentFrame;
@@ -457,21 +547,22 @@ public sealed class TextToAnimationWindow : Widget
 	protected override void OnKeyPress( KeyEvent e )
 	{
 		base.OnKeyPress( e );
+		var editor = Session.HasModel;
 		var handled = true;
 		switch ( e.Key )
 		{
 			case KeyCode.Space: TogglePlay(); break;
-			case KeyCode.Left: Step( -1 ); break;
-			case KeyCode.Right: Step( 1 ); break;
-			case KeyCode.Home: Session.Seek( 0 ); break;
-			case KeyCode.End: Session.Seek( Session.ActiveClip?.FrameCount - 1 ?? 0 ); break;
+			case KeyCode.Left when editor: Step( -1 ); break;
+			case KeyCode.Right when editor: Step( 1 ); break;
+			case KeyCode.Home when editor: Session.Seek( 0 ); break;
+			case KeyCode.End when editor: Session.Seek( Session.ActiveClip?.FrameCount - 1 ?? 0 ); break;
 			case KeyCode.Z when e.HasCtrl && e.HasShift: Session.RedoEdit(); break;
 			case KeyCode.Z when e.HasCtrl: Session.UndoEdit(); break;
 			case KeyCode.Y when e.HasCtrl: Session.RedoEdit(); break;
 			case KeyCode.S when e.HasCtrl: _ = Save.SaveAsync( Session.ActiveClip ); break;
-			case KeyCode.D when e.HasCtrl: if ( Session.ActiveClip is { } c ) Session.Duplicate( c ); break;
-			case KeyCode.K: PosePanelAddKey(); break;
-			case KeyCode.P: _timeline.TogglePin( Session.CurrentFrame ); break;
+			case KeyCode.D when e.HasCtrl && editor: if ( Session.ActiveClip is { } c ) Session.Duplicate( c ); break;
+			case KeyCode.K when editor: AddKey(); break;
+			case KeyCode.P when editor: _timeline.TogglePin( Session.CurrentFrame ); break;
 			case KeyCode.Escape: Session.SelectBone( null ); Session.SetRange( null, null ); break;
 			default: handled = false; break;
 		}
@@ -484,6 +575,7 @@ public sealed class TextToAnimationWindow : Widget
 	void Frame()
 	{
 		if ( !this.IsValid() ) return;
+		Session.Tick( RealTime.Delta ); // playback (the views only draw it; there can be more than one)
 		_indicator?.Tick();
 		if ( _firstLoad?.Visible == true ) _firstLoad.Tick();
 		if ( Session.Playing ) RefreshTransport();
@@ -493,48 +585,54 @@ public sealed class TextToAnimationWindow : Widget
 	{
 		if ( (change & (SessionChange.Model | SessionChange.Busy | SessionChange.ActiveClip | SessionChange.ClipData | SessionChange.ClipList | SessionChange.Undo)) != 0 ) RefreshAll();
 		else if ( (change & SessionChange.Playhead) != 0 ) RefreshTransport();
-		if ( (change & SessionChange.Model) != 0 && Session.Model is not null ) Viewport.SetModel( Session.Model );
+		if ( (change & SessionChange.Model) != 0 && Session.Model is not null )
+		{
+			Viewport.SetModel( Session.Model );
+		}
 	}
 
 	void RefreshAll()
 	{
+		if ( _editPrompt is null ) return;
 		var hasModel = Session.HasModel;
 		var clip = Session.ActiveClip;
 		var busy = Session.Busy;
-		_modelButton.Text = hasModel ? Session.ModelAsset.Name : "Choose model…";
-		_modelPath.Text = hasModel ? Session.ModelAsset.Path : "";
-		_undo.Enabled = Session.Undo?.CanUndo == true && !busy;
-		_redo.Enabled = Session.Undo?.CanRedo == true && !busy;
-		_undo.ToolTip = Session.Undo?.UndoLabel is { } u ? $"Undo {u} (Ctrl+Z)" : "Undo (Ctrl+Z)";
-		_redo.ToolTip = Session.Undo?.RedoLabel is { } r ? $"Redo {r} (Ctrl+Y)" : "Redo (Ctrl+Y)";
-		_newButton.Enabled = !busy;
-		_importButton.Enabled = hasModel && !busy;
-		_saveButton.Enabled = clip is not null && !busy;
-		_replaceButton.Enabled = clip is not null && !busy;
-		_exportButton.Enabled = clip is not null && !busy;
-		_modelButton.Enabled = !busy;
-
-		var showIndicator = busy && Flow.Running;
-		_indicator.Visible = showIndicator;
-		_indicator.Busy = showIndicator;
-		if ( showIndicator && _lastProgress.Length == 0 ) _indicator.SetMessage( Session.BusyText + "…" );
-		if ( !busy ) _lastProgress = "";
-		Viewport.Visible = hasModel && !showIndicator;
+		var editor = hasModel;
 		var starting = _starting is not null || (!hasModel && busy);
 		_main.Visible = hasModel;
 		_start.Visible = !hasModel && !starting;
 		_firstLoad.Visible = !hasModel && starting;
 		_firstLoad.Busy = _firstLoad.Visible;
-		_cancel.Visible = Flow.Running;
 
+		_modelButton.Text = hasModel ? Session.ModelAsset.Name : "No character";
+		_modelButton.ToolTip = hasModel ? $"{Session.ModelAsset.Path} - click to switch" : "Choose the model to animate";
+		_modelButton.Enabled = !busy;
+		_undo.Enabled = Session.Undo?.CanUndo == true && !busy;
+		_redo.Enabled = Session.Undo?.CanRedo == true && !busy;
+		_undo.ToolTip = Session.Undo?.UndoLabel is { } u ? $"Undo {u} (Ctrl+Z)" : "Undo (Ctrl+Z)";
+		_redo.ToolTip = Session.Undo?.RedoLabel is { } r ? $"Redo {r} (Ctrl+Y)" : "Redo (Ctrl+Y)";
+		_saveButton.Enabled = clip is not null && !busy;
+		_moreButton.Enabled = hasModel && !busy;
+
+		// editor view
+		var showIndicator = busy && Flow.Running && editor;
+		_indicator.Visible = showIndicator;
+		_indicator.Busy = showIndicator;
+		if ( showIndicator && _lastProgress.Length == 0 ) _indicator.SetMessage( Session.BusyText + "…" );
+		if ( !busy ) _lastProgress = "";
+		Viewport.Visible = hasModel && !showIndicator;
+		_cancel.Visible = Flow.Running;
 		_clipTitle.Text = clip?.Name ?? (hasModel ? "No animation open" : "");
-		_clipPill.Set( clip is null ? "" : clip.Origin switch
+		var pill = clip is null ? "" : clip.Origin switch
 		{
 			ClipOrigin.Generated => "GENERATED",
 			ClipOrigin.Imported or ClipOrigin.ImportedFile => "IMPORTED",
 			ClipOrigin.Duplicated => "COPY",
 			_ => "NEW",
-		}, TaStyle.Accent );
+		};
+		_clipPill.Set( pill, TaStyle.Accent );
+		RefreshEditPrompt();
+
 		RefreshTransport();
 	}
 

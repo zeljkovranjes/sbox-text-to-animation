@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Editor;
 using Sandbox;
+using TextToAnimation.Editor.Session;
 
 namespace TextToAnimation.Editor.UI;
 
@@ -16,7 +17,7 @@ public sealed class StartPage : Widget
 	int _hover;
 
 	public StartPage( Widget parent, Action<IReadOnlyList<string>> open, Action chooseFile, Action chooseFromDisk,
-		Action newFromCitizen, Action newFromCitizenHuman ) : base( parent )
+		Action newFromCitizen, Action newFromCitizenHuman, GenerationFlow flow ) : base( parent )
 	{
 		_open = open;
 		AcceptDrops = true;
@@ -46,6 +47,8 @@ public sealed class StartPage : Widget
 		fresh.Add( new TaButton( this, "New from Citizen", "person_add", newFromCitizen, "Start fresh: copies citizen.vmdl into your project", 32 ) );
 		fresh.Add( new TaButton( this, "New from Citizen Human", "person_add", newFromCitizenHuman, "Start fresh: copies citizen_human_male.vmdl into your project", 32 ) );
 		fresh.AddStretchCell();
+		center.AddSpacingCell( 8 );
+		center.Add( new DownloadStrip( this, flow ) { FixedWidth = 560 } );
 		row.AddStretchCell();
 		Layout.AddStretchCell();
 	}

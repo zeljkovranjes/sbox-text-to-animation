@@ -44,11 +44,10 @@ public sealed class PosePanel : Widget
 		Layout.Spacing = 8;
 
 		// ---- bones
-		var bonesCard = Layout.Add( new TaCard( this ), 1 );
-		bonesCard.Header( "account_tree", "Bones" ).AddStretchCell();
-		_filter = bonesCard.Layout.Add( TaStyle.Framed( new LineEdit( bonesCard ) { PlaceholderText = "Filter bones…" } ) );
+		var bonesCard = Layout.Add( new TaFold( this, "account_tree", "Bones", open: true, key: "pose.bonesCard" ), 1 );
+		_filter = bonesCard.Content.Add( TaStyle.Framed( new LineEdit( bonesCard ) { PlaceholderText = "Filter bones…" } ) );
 		_filter.TextEdited += _ => RebuildTree();
-		_treeScroll = bonesCard.Layout.Add( new ScrollArea( bonesCard ), 1 );
+		_treeScroll = bonesCard.Content.Add( new ScrollArea( bonesCard ), 1 );
 		_treeScroll.MinimumHeight = 160;
 		_treeScroll.HorizontalScrollbarMode = ScrollbarMode.Off;
 		_treeScroll.SetStyles( "background-color: transparent;" );
@@ -58,30 +57,29 @@ public sealed class PosePanel : Widget
 		_treeScroll.Canvas = _tree;
 
 		// ---- selected bone
-		var poseCard = Layout.Add( new TaCard( this ) );
-		poseCard.Header( "3d_rotation", "Pose" ).AddStretchCell();
-		_boneTitle = poseCard.Layout.Add( TaStyle.Muted( new Label( "", poseCard ) { WordWrap = true }, small: true ) );
+		var poseCard = Layout.Add( new TaFold( this, "3d_rotation", "Pose", open: true, key: "pose.poseCard" ) );
+		_boneTitle = poseCard.Content.Add( TaStyle.Muted( new Label( "", poseCard ) { WordWrap = true }, small: true ) );
 		string[] axes = { "Bend (X)", "Twist (Y)", "Side (Z)" };
 		for ( var i = 0; i < 3; i++ )
 		{
-			var row = TaStyle.FieldRow( poseCard, poseCard.Layout, axes[i], 70f );
+			var row = TaStyle.FieldRow( poseCard, poseCard.Content, axes[i], 70f );
 			var axis = i;
 			_angles[i] = row.Add( new FloatSlider( poseCard ) { Minimum = -180f, Maximum = 180f, Value = 0f }, 1 );
 			_angleLabels[i] = row.Add( TaStyle.Muted( new Label( "0°", poseCard ) { FixedWidth = 40 } ) );
 			_angles[i].OnValueEdited = () => SliderEdited();
 		}
-		var keyRow = poseCard.Layout.AddRow();
+		var keyRow = poseCard.Content.AddRow();
 		keyRow.Spacing = 4;
 		keyRow.Add( TaStyle.Icon( poseCard, "skip_previous", () => JumpKey( -1 ), "Previous key", 26 ) );
 		keyRow.Add( new TaButton( poseCard, "Key", "key", AddKey, "Key the selected bones on this frame" ) );
 		keyRow.Add( new TaButton( poseCard, "Delete key", "key_off", DeleteKey, "Remove the selected bones' keys on this frame" ) );
 		keyRow.Add( TaStyle.Icon( poseCard, "skip_next", () => JumpKey( 1 ), "Next key", 26 ) );
-		var copyRow = poseCard.Layout.AddRow();
+		var copyRow = poseCard.Content.AddRow();
 		copyRow.Spacing = 4;
 		copyRow.Add( new TaButton( poseCard, "Copy pose", "content_copy", CopyPose, "Copy the selected bones' pose on this frame (all bones when nothing is selected)" ) );
 		copyRow.Add( new TaButton( poseCard, "Paste pose", "content_paste", PastePose, "Key the copied pose on this frame" ) );
 		copyRow.Add( new TaButton( poseCard, "Reset", "restart_alt", ResetPose, "Remove the selected bones' edits on every frame" ) );
-		var falloffRow = TaStyle.FieldRow( poseCard, poseCard.Layout, "Blend", 70f, "How many frames a key fades in and out over" );
+		var falloffRow = TaStyle.FieldRow( poseCard, poseCard.Content, "Blend", 70f, "How many frames a key fades in and out over" );
 		_falloff = falloffRow.Add( new FloatSlider( poseCard ) { Minimum = 1, Maximum = 60, Value = 8 }, 1 );
 		_falloffLabel = falloffRow.Add( TaStyle.Muted( new Label( "8 fr", poseCard ) { FixedWidth = 40 } ) );
 		_falloff.OnValueEdited = () =>
@@ -90,17 +88,16 @@ public sealed class PosePanel : Widget
 			if ( !_refreshing && _session.ActiveClip is { } clip && clip.Keys.FalloffFrames != (int)_falloff.Value )
 				_session.Edit( "Key blend", c => c.Keys.FalloffFrames = (int)_falloff.Value );
 		};
-		_keyInfo = poseCard.Layout.Add( TaStyle.Muted( new Label( "", poseCard ) { WordWrap = true }, small: true ) );
+		_keyInfo = poseCard.Content.Add( TaStyle.Muted( new Label( "", poseCard ) { WordWrap = true }, small: true ) );
 
 		// ---- locks
-		var lockCard = Layout.Add( new TaCard( this ) );
-		lockCard.Header( "lock", "Lock for regeneration" ).AddStretchCell();
-		lockCard.Layout.Add( TaStyle.Muted( new Label( "Locked bones (amber) keep their motion when you use Generate → Edit.", lockCard ) { WordWrap = true }, small: true ) );
-		var lockRow = lockCard.Layout.AddRow();
+		var lockCard = Layout.Add( new TaFold( this, "lock", "Lock for regeneration", open: true, key: "pose.lockCard" ) );
+		lockCard.Content.Add( TaStyle.Muted( new Label( "Locked bones (amber) keep their motion when you use Generate → Edit.", lockCard ) { WordWrap = true }, small: true ) );
+		var lockRow = lockCard.Content.AddRow();
 		lockRow.Spacing = 4;
 		lockRow.Add( new TaButton( lockCard, "Lock selected", "lock", () => BoneLocks.LockSelected( _session ) ) );
 		lockRow.Add( new TaButton( lockCard, "Lock hierarchy", "account_tree", () => BoneLocks.LockHierarchy( _session ) ) );
-		var lockRow2 = lockCard.Layout.AddRow();
+		var lockRow2 = lockCard.Content.AddRow();
 		lockRow2.Spacing = 4;
 		lockRow2.Add( new TaButton( lockCard, "Lock all except selected", "flip", () => BoneLocks.LockAllExcept( _session ) ) );
 		lockRow2.Add( new TaButton( lockCard, "Unlock", "lock_open", () => BoneLocks.Unlock( _session ), "Unlock the selection (all bones when nothing is selected)" ) );
