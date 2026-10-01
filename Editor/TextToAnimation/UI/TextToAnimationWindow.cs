@@ -315,6 +315,9 @@ public sealed class TextToAnimationWindow : Widget
 	/// <summary>True while the range bar shows icons only (too narrow for its labels).</summary>
 	public bool RangeBarCompact => _rangeBar.Compact;
 
+	/// <summary>The animation list on the left.</summary>
+	public ClipListPanel ClipList => _clips;
+
 	/// <summary>The timeline under the prompt.</summary>
 	public TimelineWidget Timeline => _timeline;
 

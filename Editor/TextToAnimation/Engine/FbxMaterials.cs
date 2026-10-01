@@ -49,15 +49,26 @@ public static partial class FbxMaterials
 		var textures = new Dictionary<long, string>();
 		var videos = new Dictionary<long, string>();
 		var doubleSidedModels = new HashSet<long>();
+		// FBX 6 names objects ("Material::skin") instead of numbering them and links them with Connect
+		// records that use those names: give each name a stable id so both versions read the same way
+		var namedIds = new Dictionary<string, long>( StringComparer.Ordinal );
+		long IdOf( object p ) => p is string named
+			? (namedIds.TryGetValue( named, out var known ) ? known : namedIds[named] = -1 - namedIds.Count)
+			: Convert.ToInt64( p );
+		static bool IsId( object p ) => p is long or int or string;
 
 		if ( objects is not null )
 		{
 			foreach ( var node in objects.Children )
 			{
-				if ( node.Properties.Count < 2 || node.Properties[0] is not (long or int)
-					|| node.Properties[1] is not string rawName )
+				string rawName;
+				if ( node.Properties.Count >= 2 && node.Properties[0] is long or int && node.Properties[1] is string numbered )
+					rawName = numbered;
+				else if ( node.Properties.Count >= 1 && node.Properties[0] is string named )
+					rawName = named; // FBX 6
+				else
 					continue;
-				var id = node.Prop<long>( 0 );
+				var id = IdOf( node.Properties[0] );
 				if ( node.Name == "Model" && string.Equals(
 					node.Child( "Culling" )?.Properties.FirstOrDefault() as string,
 					"CullingOff", StringComparison.OrdinalIgnoreCase ) )
@@ -91,36 +102,35 @@ public static partial class FbxMaterials
 		if ( connections is null )
 			return materials.Values.ToList();
 
+		var links = connections.ChildrenNamed( "C" ).Concat( connections.ChildrenNamed( "Connect" ) ).ToList();
 		var coloredGeometry = objects?.Children.Where( n => n.Name == "Geometry"
-			&& TextToAnimation.Editor.Formats.Fbx.FbxMaterialColor.HasVertexColors( n ) )
-			.Select( n => n.Prop<long>( 0 ) ).ToHashSet() ?? new HashSet<long>();
-		var coloredModels = connections.ChildrenNamed( "C" )
+			&& TextToAnimation.Editor.Formats.Fbx.FbxMaterialColor.HasVertexColors( n ) && n.Properties.Count > 0 && IsId( n.Properties[0] ) )
+			.Select( n => IdOf( n.Properties[0] ) ).ToHashSet() ?? new HashSet<long>();
+		var coloredModels = links
 			.Where( n => n.Properties.Count >= 3 && n.Properties[0] is "OO"
-				&& n.Properties[1] is long or int && n.Properties[2] is long or int
-				&& coloredGeometry.Contains( n.Prop<long>( 1 ) ) )
-			.Select( n => n.Prop<long>( 2 ) ).ToHashSet();
+				&& IsId( n.Properties[1] ) && IsId( n.Properties[2] )
+				&& coloredGeometry.Contains( IdOf( n.Properties[1] ) ) )
+			.Select( n => IdOf( n.Properties[2] ) ).ToHashSet();
 
 		// Video objects commonly carry the only usable filename and parent a Texture.
-		foreach ( var connection in connections.ChildrenNamed( "C" ) )
+		foreach ( var connection in links )
 		{
 			if ( connection.Properties.Count < 3 || connection.Properties[0] is not string kind
-				|| kind != "OO" || connection.Properties[1] is not (long or int)
-				|| connection.Properties[2] is not (long or int) )
+				|| kind != "OO" || !IsId( connection.Properties[1] ) || !IsId( connection.Properties[2] ) )
 				continue;
-			var source = connection.Prop<long>( 1 );
-			var target = connection.Prop<long>( 2 );
+			var source = IdOf( connection.Properties[1] );
+			var target = IdOf( connection.Properties[2] );
 			if ( videos.TryGetValue( source, out var file ) && !textures.ContainsKey( target ) )
 				textures[target] = file;
 		}
 
-		foreach ( var connection in connections.ChildrenNamed( "C" ) )
+		foreach ( var connection in links )
 		{
 			if ( connection.Properties.Count < 3 || connection.Properties[0] is not string kind
-				|| connection.Properties[1] is not (long or int)
-				|| connection.Properties[2] is not (long or int) )
+				|| !IsId( connection.Properties[1] ) || !IsId( connection.Properties[2] ) )
 				continue;
-			var source = connection.Prop<long>( 1 );
-			var target = connection.Prop<long>( 2 );
+			var source = IdOf( connection.Properties[1] );
+			var target = IdOf( connection.Properties[2] );
 			// FBX stores sidedness on the mesh model, not its material.
 			if ( kind == "OO" && coloredModels.Contains( target )
 				&& materials.TryGetValue( source, out var coloredMaterial ) )

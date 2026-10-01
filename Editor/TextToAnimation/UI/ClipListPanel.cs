@@ -19,6 +19,7 @@ public sealed class ClipListPanel : TaCard
 	readonly ScrollArea _scroll;
 	readonly Widget _canvas;
 	readonly Label _empty;
+	readonly Widget _emptyHost;
 
 	public Action NewClip { get; set; }
 	public Action ImportExisting { get; set; }
@@ -34,7 +35,12 @@ public sealed class ClipListPanel : TaCard
 		header.Add( TaStyle.Icon( this, "add", () => NewClip?.Invoke(), "New animation", 22 ) );
 		header.Add( TaStyle.Icon( this, "download", () => ImportExisting?.Invoke(), "Import an existing animation from the model", 22 ) );
 
-		_empty = Layout.Add( TaStyle.Muted( new Label( "", this ) { WordWrap = true, Alignment = TextFlag.Center }, small: true ) );
+		// the empty-list hint, centred in the panel in place of the list
+		_emptyHost = Layout.Add( new Widget( this ) { Layout = Layout.Column() }, 1 );
+		_emptyHost.Layout.Margin = new Sandbox.UI.Margin( 12, 0, 12, 0 );
+		_emptyHost.Layout.AddStretchCell();
+		_empty = _emptyHost.Layout.Add( TaStyle.Muted( new Label( "", _emptyHost ) { WordWrap = true, Alignment = TextFlag.Center } ) );
+		_emptyHost.Layout.AddStretchCell();
 		_scroll = Layout.Add( new ScrollArea( this ), 1 );
 		_scroll.HorizontalScrollbarMode = ScrollbarMode.Off;
 		_scroll.SetStyles( "background-color: transparent;" );
@@ -52,13 +58,17 @@ public sealed class ClipListPanel : TaCard
 		Rebuild();
 	}
 
+	/// <summary>True while the list is empty and shows its centred hint.</summary>
+	public bool ShowsEmptyHint => _emptyHost.Visible;
+
 	public void Rebuild()
 	{
 		_canvas.Layout.Clear( true );
 		var ws = _session.Workspace;
 		var clips = ws?.Clips ?? new List<AnimClip>();
 		_count.Set( clips.Count == 0 ? "" : $"{clips.Count}", Theme.TextLight );
-		_empty.Visible = clips.Count == 0;
+		_emptyHost.Visible = clips.Count == 0;
+		_scroll.Visible = clips.Count > 0;
 		_empty.Text = ws is null
 			? "Choose a model to start."
 			: "No animations yet.\nPress + to create one, or import one the model already has.";

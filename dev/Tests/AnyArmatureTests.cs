@@ -56,6 +56,10 @@ public class AnyArmatureTests
         return clip;
     }
 
+    /// <summary>
+    /// Every creature goes through upstream UniMate's preparation: real bones only (no invented joints), upstream's
+    /// clean names and facing rule, canonical rest facing +Z with Y up.
+    /// </summary>
     [Theory]
     [MemberData(nameof(CreatureNames))]
     public void BuildsAUniMateRigForEveryCreature(string creature)
@@ -63,71 +67,75 @@ public class AnyArmatureTests
         var rig = Rig(creature);
         var u = UniMateRig.Build(rig);
         var s = rig.Skeleton;
-        _out.WriteLine($"{creature}: {u.Count} joints, family {u.Family}, facing {u.Skeleton.RightHip}/{u.Skeleton.LeftHip} body axis {u.Skeleton.BodyAxis}");
+        _out.WriteLine($"{creature}: {u.Count} joints, family {u.Family}, facing {u.Skeleton.RightHip}/{u.Skeleton.LeftHip} ({u.Prep.FaceSource}) body axis {u.Skeleton.BodyAxis}");
         _out.WriteLine(string.Join(", ", u.Skeleton.CleanNames));
-        Assert.InRange(u.Count, 5, UniMateRig.MaxJoints);
-        Assert.Equal(RigFamily.Animal, u.Family);
-        Assert.Equal(rig.Analysis.BodyRoot, u.RootBone);
-        Assert.All(u.Bone.Where(b => b >= 0), b => Assert.True(rig.Analysis.InBody[b]));
+        Assert.InRange(u.Count, UniMateRig.MinJoints, UniMateRig.MaxJoints);
+        Assert.All(u.Bone, b => Assert.InRange(b, 0, s.Count - 1));
+        Assert.Equal(u.Count, u.Bone.Distinct().Count());
         Assert.All(u.Skeleton.CleanNames, n => Assert.False(string.IsNullOrWhiteSpace(n)));
-        Assert.True(u.Skeleton.RightHip >= 0 && u.Skeleton.LeftHip >= 0, "every creature here has face joints");
-        Assert.Equal(creature == "snake", u.Skeleton.BodyAxis);
+        for (var j = 0; j < u.Count; j++)
+            Assert.Equal(UniMateNames.Clean(s[u.Bone[j]].Name, ""), u.Skeleton.CleanNames[j]);
+        // the facing joints are exactly the ones upstream's rule picks from those names
+        var kept = u.Prep.Kept;
+        var (r, l, bodyAxis, _) = UniMateNames.ResolveFaceJoints(u.Prep.CleanNames, u.Prep.RawNames);
+        Assert.Equal(r < 0 ? -1 : kept[r], u.Skeleton.RightHip < 0 ? -1 : u.Bone[u.Skeleton.RightHip]);
+        Assert.Equal(l < 0 ? -1 : kept[l], u.Skeleton.LeftHip < 0 ? -1 : u.Bone[u.Skeleton.LeftHip]);
+        Assert.Equal(bodyAxis, u.Skeleton.BodyAxis);
+        if (u.Skeleton.RightHip < 0) return;
         // the canonical rest faces +Z with Y up: the face pair lies across X (or the body along Z)
         var across = u.Skeleton.TPose[u.Skeleton.RightHip] - u.Skeleton.TPose[u.Skeleton.LeftHip];
         if (u.Skeleton.BodyAxis) Assert.True(across.Z > 0.9f * across.Length(), $"head-tail {across}");
         else Assert.True(across.X < -0.9f * across.Length(), $"right-left {across}");
     }
 
+    /// <summary>The bone order in the file doesn't change the result (only names and the hierarchy do, as upstream).</summary>
     [Theory]
     [MemberData(nameof(CreatureNames))]
-    public void UniMateRigDoesNotDependOnNamesOrBoneOrder(string creature)
+    public void UniMateRigDoesNotDependOnBoneOrder(string creature)
     {
         var spec = RigAnalysisTests.SpecOf(creature);
-        var rename = Creatures.Gibberish(spec.Select(x => x.Name));
-        AssertSameUniMateRig(MotionRig.Create(Creatures.Build(spec)), MotionRig.Create(Creatures.Build(spec, rename, 31)), rename);
+        var a = MotionRig.Create(Creatures.Build(spec));
+        var b = MotionRig.Create(Creatures.Build(spec, x => x, 31));
+        var ua = UniMateRig.Build(a); var ub = UniMateRig.Build(b);
+        Assert.Equal(ua.Count, ub.Count);
+        string NameA(int j) => a.Skeleton[ua.Bone[j]].Name;
+        string NameB(int j) => b.Skeleton[ub.Bone[j]].Name;
+        Assert.Equal(Enumerable.Range(0, ua.Count).Select(NameA).OrderBy(n => n), Enumerable.Range(0, ub.Count).Select(NameB).OrderBy(n => n));
+        Assert.Equal(ua.Skeleton.RightHip < 0 ? "" : NameA(ua.Skeleton.RightHip), ub.Skeleton.RightHip < 0 ? "" : NameB(ub.Skeleton.RightHip));
+        Assert.Equal(ua.Skeleton.LeftHip < 0 ? "" : NameA(ua.Skeleton.LeftHip), ub.Skeleton.LeftHip < 0 ? "" : NameB(ub.Skeleton.LeftHip));
+        for (var j = 0; j < ua.Count; j++)
+        {
+            var k = Enumerable.Range(0, ub.Count).First(i => NameB(i) == NameA(j));
+            Assert.Equal(ua.Skeleton.CleanNames[j], ub.Skeleton.CleanNames[k]);
+            Assert.True(Vector3.Distance(ua.Skeleton.TPose[j], ub.Skeleton.TPose[k]) < 1e-5f, $"{NameA(j)}");
+        }
     }
 
     [Fact]
-    public void RenamedHumanGetsTheSameUniMateRig()
+    public void RenamedHumanIsRecognisedFromItsShape()
     {
-        var named = Fixtures.HumanRig();
         var (skeleton, rename) = RigAnalysisTests.RenamedHuman();
         var renamed = MotionRig.Create(skeleton);
         Assert.True(renamed.IsHumanoid);
         Assert.Equal(2, renamed.Feet.Count);
         Assert.True(Vector3.Dot(renamed.Forward, Vector3.UnitX) > 0.99f);
         Assert.Equal(rename("pelvis"), renamed.Skeleton[renamed.HipsIndex].Name);
-        AssertSameUniMateRig(named, renamed, rename);
-        Assert.Equal(RigFamily.Humanoid, UniMateRig.Build(renamed).Family);
     }
 
-    static void AssertSameUniMateRig(MotionRig a, MotionRig b, Func<string, string> rename)
-    {
-        var ua = UniMateRig.Build(a);
-        var ub = UniMateRig.Build(b);
-        Assert.Equal(ua.Count, ub.Count);
-        Assert.Equal(ua.Bone.Select(x => x < 0 ? null : rename(a.Skeleton[x].Name)), ub.Bone.Select(x => x < 0 ? null : b.Skeleton[x].Name));
-        Assert.Equal(ua.Skeleton.CleanNames, ub.Skeleton.CleanNames);
-        Assert.Equal(ua.Skeleton.Parents, ub.Skeleton.Parents);
-        Assert.Equal(ua.Skeleton.RightHip, ub.Skeleton.RightHip);
-        Assert.Equal(ua.Skeleton.LeftHip, ub.Skeleton.LeftHip);
-        Assert.Equal(ua.Family, ub.Family);
-        for (var j = 0; j < ua.Count; j++)
-            Assert.True(Vector3.Distance(ua.Skeleton.TPose[j], ub.Skeleton.TPose[j]) < 1e-5f, $"joint {j} {ua.Skeleton.CleanNames[j]}");
-    }
-
+    /// <summary>Over the checkpoint's joint limit, leaves are trimmed shortest first (the port's one extension).</summary>
     [Fact]
     public void LongRigsAreTrimmedToTheJointBudget()
     {
         var rig = Rig("dragon");
-        Assert.True(rig.Analysis.BodySubtree(rig.Analysis.BodyRoot).Count() > UniMateRig.MaxJoints);
+        Assert.True(rig.Skeleton.Count > UniMateRig.MaxJoints);
         var u = UniMateRig.Build(rig);
-        Assert.InRange(u.Count, 5, UniMateRig.MaxJoints);
-        var names = u.Skeleton.CleanNames;
-        Assert.Contains("Head", names);
-        Assert.Contains("Left Wing", names);
-        Assert.Contains("Right Thigh", names);
-        Assert.Contains("Tail", names);
+        Assert.Equal(UniMateRig.MaxJoints, u.Count);
+        Assert.Equal(rig.Skeleton.Count - UniMateRig.MaxJoints, u.Prep.TrimmedLeaves);
+        // only leaves went: every kept bone's kept ancestors chain up to the root unbroken
+        var kept = u.Bone.ToHashSet();
+        foreach (var b in u.Bone)
+            for (var p = rig.Skeleton[b].ParentIndex; p >= 0; p = rig.Skeleton[p].ParentIndex)
+                Assert.Contains(p, kept);
     }
 
     [Theory]

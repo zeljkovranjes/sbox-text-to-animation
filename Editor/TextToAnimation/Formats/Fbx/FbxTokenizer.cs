@@ -76,11 +76,12 @@ public static class FbxTokenizer
     {
         int pos = Magic.Length;
         uint version = ReadU32(data, ref pos);
-        // FBX 6.x stores transforms in Properties60 blocks with a different property layout;
-        // parsing it with 7.x semantics silently yields identity transforms. Reject it.
-        if (version < 7000)
+        // FBX 6.x uses the same node records as 7.0-7.4 (its objects are named rather than numbered, and its
+        // properties live in Properties60 blocks). Readers here only take names, materials and textures from
+        // it - nothing reads FBX transforms - so it parses; the engine imports the mesh and skeleton itself.
+        if (version < 6000)
             throw new FormatException(
-                $"FBX 6.x (Properties60) is not supported (file declares version {version}); re-export as FBX 7.x (2011 or newer).");
+                $"FBX {version / 1000}.x is too old (file declares version {version}); re-export as FBX 6.1 or newer.");
         // Version >= 7500 widened the three node-header fields from u32 to u64.
         bool wide = version >= 7500;
 

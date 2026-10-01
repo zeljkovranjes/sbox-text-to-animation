@@ -75,7 +75,7 @@ public sealed class SaveFlow
 			if ( !result.Success )
 			{
 				// say the model is safe: a failed save puts the original vmdl back
-				var restored = result.RolledBack ? " Nothing was changed: the model is back to how it was." : "";
+				var restored = result.RolledBack && !result.Notes.Any( e => e.Contains( "restored", StringComparison.OrdinalIgnoreCase ) ) ? " Nothing was changed: the model is back to how it was." : "";
 				_session.SetStatus( string.Join( " ", result.Errors.Concat( result.Notes ) ) + restored, UI.Tone.Red );
 				return false;
 			}

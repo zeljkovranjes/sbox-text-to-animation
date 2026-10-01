@@ -54,7 +54,10 @@ public class RoundTripTests
         var back = uni.ToFrames(src, frames);
 
         var worst = 0f; var worstBone = "";
-        var animated = Enumerable.Range(0, uni.Count).Where(j => uni.Bone[j] >= 0).Select(j => uni.Bone[j]).ToHashSet();
+        // upstream's representation stores a joint's rotation in its children's slots (HML order), so a leaf joint's
+        // own rotation isn't carried (upstream reconstructs leaves following their parent): compare the others
+        var hasChild = Enumerable.Range(0, uni.Count).Select(j => uni.Skeleton.Parents.Contains(j)).ToArray();
+        var animated = Enumerable.Range(0, uni.Count).Where(j => hasChild[j]).Select(j => uni.Bone[j]).ToHashSet();
         var wa = new XForm[skeleton.Count]; var wb = new XForm[skeleton.Count];
         for (var t = 0; t < frames.Count - 1; t++) // the last frame has no velocity
         {

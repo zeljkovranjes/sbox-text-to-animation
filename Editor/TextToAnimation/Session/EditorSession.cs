@@ -139,6 +139,9 @@ public sealed class EditorSession
 
 		var vmdl = ModelBridge.SourcePathOf( asset );
 		var text = vmdl is not null ? EngineThread.Try( () => File.ReadAllText( vmdl ) ) : null;
+		// skin weights from the model's source FBX: UniMate's skeleton preparation prunes on them
+		var weights = text is null ? null : EngineThread.Try( () => FbxSkin.ForVmdl( text, rel => VmdlSources.Resolve( rel, vmdl ) ) );
+		Inference.UniMate.UniMateSkin.Attach( skeleton, weights, asset.Name );
 
 		LoadWarnings.Clear();
 		AnimationWorkspace ws;

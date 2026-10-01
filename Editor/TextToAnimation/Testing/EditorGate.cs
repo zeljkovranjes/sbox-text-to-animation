@@ -114,6 +114,26 @@ public static class EditorGate
 		var window = TextToAnimationWindow.Open();
 		await EngineThread.DelayOnMain( 500 );
 		Check( "start page shows first", window.ShowsStartPage && !window.Session.HasModel );
+		// import only: make models from every FBX under a folder exactly as dropping them would, and stop
+		// (no generation, no checks) - for preparing rigs someone else will try
+		if ( Environment.GetEnvironmentVariable( "T2A_GATE_IMPORT_ONLY" ) is { Length: > 0 } importFolder && Directory.Exists( importFolder ) )
+		{
+			foreach ( var fbx in Directory.GetFiles( importFolder, "*.fbx", SearchOption.AllDirectories ) )
+			{
+				try
+				{
+					var made = await StarterModels.ImportFbxAsync( fbx );
+					await EngineThread.SwitchToMainThread();
+					Note( $"IMPORT {Path.GetFileName( fbx )}: compiled={made.Compiled} vmdl={made.Asset?.AbsolutePath} {made.Error} {made.Note}" );
+				}
+				catch ( Exception e )
+				{
+					await EngineThread.SwitchToMainThread();
+					Note( $"IMPORT {Path.GetFileName( fbx )}: refused - {e.Message}" );
+				}
+			}
+			return true;
+		}
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_ONLY_CREATURES" ) == "1" )
 		{
 			var onlyShots = Path.Combine( Path.GetDirectoryName( _resultPath )!, "gate_shots" );
@@ -137,6 +157,7 @@ public static class EditorGate
 		Check( "start page hides once a model is open", !window.ShowsStartPage );
 		Check( "an empty workspace starts with a new-animation prompt", window.EditPrompt.Target is null );
 		Check( "an empty workspace shows the quick start and the empty side panel", window.ShowsQuickStart && window.ShowsSideEmptyState );
+		Check( "an empty animation list shows its centred hint", window.ClipList.ShowsEmptyHint );
 		window.QuickStart.Pick( 0 );
 		Check( "a quick-start example fills the prompt", window.EditPrompt.Text == window.QuickStart.Examples[0], window.EditPrompt.Text );
 		window.EditPrompt.Text = "";
@@ -221,7 +242,7 @@ public static class EditorGate
 			popup.Close();
 			var help = new UI.HelpPopup( window );
 			help.OpenAbove( composer );
-			await EngineThread.DelayOnMain( 300 );
+			await WaitUntil( () => help.IsValid() && help.Visible, 3 );
 			Check( "the help card opens with every shortcut", help.IsValid() && help.Visible && UI.HelpPopup.Keys.Length >= 12, $"{UI.HelpPopup.Keys.Length} shortcuts" );
 			help.Close();
 			if ( generated is not null )
@@ -242,9 +263,13 @@ public static class EditorGate
 		// ---- 7. save into the vmdl: compile + playback verification (scale/orientation/root)
 		var toSave = generated ?? imported;
 		session.SelectClip( toSave );
+		var saveStatus = "";
+		void OnSaveStatus( string text, UI.Tone tone ) => saveStatus = text;
+		session.Status += OnSaveStatus;
 		var saved = await window.Save.SaveAsync( toSave );
+		session.Status -= OnSaveStatus;
 		await EngineThread.SwitchToMainThread();
-		Check( "save to vmdl compiles and plays back", saved, toSave.EffectiveSequenceName );
+		Check( "save to vmdl compiles and plays back", saved, $"{toSave.EffectiveSequenceName}: {saveStatus}" );
 		await session.RefreshModelAsync();
 		Check( "saved sequence is in the model", session.Model.AnimationNames.Contains( toSave.EffectiveSequenceName ) );
 
@@ -783,6 +808,26 @@ public static class EditorGate
 	static float[] BindScale( string bone ) => _bindScaleOf( bone );
 
 	/// <summary>Writes the engine skeleton (rest locals) and what the shape analysis made of it, for offline tests.</summary>
+	/// <summary>What upstream UniMate's preparation made of a rig: joints (BFS), clean names, facing, skin data, trims.</summary>
+	static object UniMateDump( MotionRig rig )
+	{
+		try
+		{
+			var u = Inference.UniMate.UniMateRig.Build( rig );
+			var s = rig.Skeleton;
+			return new
+			{
+				skinKnown = Inference.UniMate.UniMateSkin.WeightsOf( s ) is not null,
+				joints = Enumerable.Range( 0, u.Count ).Select( i => $"{s[u.Bone[i]].Name} = {u.Skeleton.CleanNames[i]}" ).ToList(),
+				facing = u.Skeleton.RightHip < 0 ? "none (identity)" : $"{s[u.Bone[u.Skeleton.RightHip]].Name} / {s[u.Bone[u.Skeleton.LeftHip]].Name}{(u.Skeleton.BodyAxis ? " (body axis)" : "")}",
+				facingRule = u.Prep.FaceSource,
+				trimmedLeaves = u.Prep.TrimmedLeaves,
+				family = u.Family.ToString(),
+			};
+		}
+		catch ( Exception e ) { return new { error = e.Message }; }
+	}
+
 	static void DumpSkeleton( MotionRig rig, string path )
 	{
 		try
@@ -806,6 +851,7 @@ public static class EditorGate
 					spine = string.Join( ",", a.SpineChain.Select( b => s[b].Name ) ),
 					bodyRoot = s[a.BodyRoot].Name,
 				},
+				unimate = UniMateDump( rig ),
 			};
 			File.WriteAllText( path, JsonSerializer.Serialize( dump, new JsonSerializerOptions { WriteIndented = true } ) );
 		}

@@ -18,7 +18,8 @@ param(
     [string]$Creatures = "",  # folder of <name>/<name>.fbx rigs to build vmdls from, animate and save (creature checks)
     [switch]$OnlyCreatures,   # skip the main checks (quick creature iteration)
     [string]$Extra = "",      # folder of *.fbx rigs dropped in as downloaded (unseen-rig checks)
-    [switch]$OnlyExtra        # with -Extra: only those rigs
+    [switch]$OnlyExtra,       # with -Extra: only those rigs
+    [string]$ImportOnly = ""  # folder of FBX: make the models (textures, vmats, vmdl) and stop, nothing else
 )
 $ErrorActionPreference = "Stop"
 $repoRoot   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -68,10 +69,11 @@ if ($Creatures) { $env:T2A_GATE_CREATURES = (Resolve-Path $Creatures).Path }
 if ($OnlyCreatures) { $env:T2A_GATE_ONLY_CREATURES = "1" }
 if ($Extra) { $env:T2A_GATE_EXTRA = (Resolve-Path $Extra).Path }
 if ($OnlyExtra) { $env:T2A_GATE_ONLY_EXTRA = "1" }
+if ($ImportOnly) { $env:T2A_GATE_IMPORT_ONLY = (Resolve-Path $ImportOnly).Path }
 try {
     Write-Host "Launching: `"$sboxExe`" -project `"$sbproj`""
     $proc = Start-Process -FilePath $sboxExe -ArgumentList @("-project", "`"$sbproj`"") -WorkingDirectory $SboxRoot -PassThru
-} finally { Remove-Item Env:T2A_GATE -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_SHOWCASE -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_CREATURES -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_ONLY_CREATURES -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_EXTRA -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_ONLY_EXTRA -ErrorAction SilentlyContinue }
+} finally { Remove-Item Env:T2A_GATE -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_SHOWCASE -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_CREATURES -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_ONLY_CREATURES -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_EXTRA -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_ONLY_EXTRA -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_IMPORT_ONLY -ErrorAction SilentlyContinue }
 $captureProc = $null
 if ($Capture) {
     $captureProc = Start-Process powershell -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "capture_windows.ps1"), "-ProcessId", $proc.Id, "-IntervalSec", "3", "-MaxShots", "200") -WindowStyle Hidden -PassThru

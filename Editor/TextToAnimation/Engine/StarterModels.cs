@@ -97,9 +97,17 @@ public static class StarterModels
 		File.Copy( fbxPath, fbxDest, true );
 
 		// textures first: generated materials reference them, and the mesh compile bakes material references in
-		FbxMaterials.CopySidecarTextures( Path.GetDirectoryName( fbxPath ), folder,
-			FbxMaterials.ExtractFbxMaterials( bytes ).SelectMany( m => m.TextureReferences ) );
-		FbxMaterials.ExtractEmbeddedTextures( bytes, folder );
+		// best effort: a file the texture reader can't follow still becomes a model (with plain materials)
+		IEnumerable<string> referenced;
+		try { referenced = FbxMaterials.ExtractFbxMaterials( bytes ).SelectMany( m => m.TextureReferences ).ToList(); }
+		catch ( Exception e ) when ( e is FormatException or InvalidOperationException or IndexOutOfRangeException or ArgumentException )
+		{
+			Log.Warning( $"[text-to-animation] couldn't read the materials in {Path.GetFileName( fbxPath )}: {e.Message}" );
+			referenced = Array.Empty<string>();
+		}
+		FbxMaterials.CopySidecarTextures( Path.GetDirectoryName( fbxPath ), folder, referenced );
+		try { FbxMaterials.ExtractEmbeddedTextures( bytes, folder ); }
+		catch ( Exception e ) when ( e is FormatException or InvalidOperationException or IndexOutOfRangeException or ArgumentException ) { }
 		CopyTextureFolders( Path.GetDirectoryName( fbxPath ), folder );
 		var remaps = FbxMaterials.GenerateMissingVmats( fbxDest );
 

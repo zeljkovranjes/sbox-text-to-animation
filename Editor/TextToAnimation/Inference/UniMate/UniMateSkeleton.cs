@@ -62,16 +62,26 @@ public sealed class UniMateSkeleton
 	public static readonly M3 EngineUpBasis = M3.FromRows( 1, 0, 0, 0, 0, 1, 0, -1, 0 );
 
 	/// <summary>
+	/// s&amp;box engine space to UniMate's canonical frame as upstream's Blender pipeline would see the same model:
+	/// (x,y,z) -> (y, z, x). Engine forward (+X) becomes +Z, the canonical forward, as a Blender-authored rig's -Y
+	/// does after upstream's Z-up -> Y-up step; it only matters when a rig has no facing joints (identity facing).
+	/// </summary>
+	public static readonly M3 EngineCanonicalBasis = M3.FromRows( 0, 1, 0, 0, 0, 1, 1, 0, 0 );
+
+	/// <summary>Blender (Z-up) to Y-up: upstream's apply_zup_to_yup, a -90 degree rotation about X.</summary>
+	public static readonly M3 BlenderUpBasis = M3.FromRows( 1, 0, 0, 0, 0, 1, 0, -1, 0 );
+
+	/// <summary>
 	/// Builds the skeleton. <paramref name="parents"/> index into the same arrays (-1 for the single root).
 	/// <paramref name="rightHip"/>/<paramref name="leftHip"/> (caller indices) define the facing; when absent,
 	/// <paramref name="forward"/> (source space) is used.
 	/// </summary>
 	public static UniMateSkeleton Build( IReadOnlyList<string> cleanNames, IReadOnlyList<int> parents,
 		IReadOnlyList<Vector3> restWorldPos, IReadOnlyList<Quaternion> restWorldRot,
-		int rightHip, int leftHip, Vector3 forward, M3 upBasis, float targetDiameter = 2f, bool bodyAxis = false )
+		int rightHip, int leftHip, Vector3? forward, M3 upBasis, float targetDiameter = 2f, bool bodyAxis = false )
 	{
 		var n = parents.Count;
-		if ( n < 5 ) throw new ArgumentException( "UniMate needs at least 5 joints." );
+		if ( n < 2 ) throw new ArgumentException( "UniMate needs at least 2 joints." ); // upstream builds any tree; the 5-joint training minimum is checked before generating
 		if ( parents.Count( p => p < 0 ) != 1 ) throw new ArgumentException( "The UniMate skeleton must have exactly one root." );
 
 		var (order, newParents) = BfsOrder( parents, restWorldPos );
@@ -96,16 +106,25 @@ public sealed class UniMateSkeleton
 			var across = Vector3.Normalize( p[rh] - p[lh] );
 			fwd = Vector3.Cross( Vector3.UnitY, across );
 		}
+		else if ( forward is { } f )
+		{
+			fwd = upBasis * f;
+			fwd.Y = 0;
+		}
 		else
 		{
-			fwd = upBasis * forward;
-			fwd.Y = 0;
+			// upstream with no face joints: identity facing (the up-aligned rest is used as it is)
+			fwd = Vector3.UnitZ;
 		}
 		fwd = Vector3.Normalize( fwd );
 		var qf = UniMateMath.Between( fwd, Vector3.UnitZ );
 		var m = M3.FromQuaternion( qf ) * upBasis;
 		p = pos.Select( v => m * v ).ToArray();
-		var scale = targetDiameter / TreeDiameter( newParents, p );
+		var diameter = TreeDiameter( newParents, p );
+		// upstream process_tpose refuses such a skeleton (DegenerateSkeletonError) rather than divide by ~0
+		if ( !float.IsFinite( diameter ) || diameter <= 1e-8f )
+			throw new ArgumentException( $"This skeleton has no measurable size (leaf-to-leaf diameter {diameter:0.###e+0}; zero-length bones?), so UniMate can't scale it." );
+		var scale = targetDiameter / diameter;
 		var origin = new Vector3( p[0].X, p.Min( v => v.Y ), p[0].Z );
 		var tpos = p.Select( v => (v - origin) * scale ).ToArray();
 		var offsets = tpos.ToArray();

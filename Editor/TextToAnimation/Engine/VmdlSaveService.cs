@@ -144,13 +144,16 @@ public static class VmdlSaveService
 			result.Errors.Add( "The model compiled but its new sequences didn't appear." );
 			return null;
 		}
+		// bones the model's own constraints drive at runtime show the constraint's result whatever we store; they
+		// (and what hangs off them) are the engine's, not something the save can get wrong
+		var driven = DrivenWithDescendants( rig, VmdlSources.ConstraintDrivenBones( original, vmdl ) );
 		var offsets = new List<System.Numerics.Quaternion>();
 		foreach ( var (sequence, expected) in plan.Expected )
 		{
 			token.ThrowIfCancellationRequested();
 			var fps = requests.FirstOrDefault( r => r.SequenceName == sequence )?.Clip.Fps ?? 30f;
 			var (frames, _) = await ModelBridge.SampleSequenceAsync( model, sequence, rig.Skeleton, fps, token );
-			result.PlaybackError[sequence] = Compare( rig, expected, frames );
+			result.PlaybackError[sequence] = Compare( rig, expected, frames, driven );
 			if ( RootOffset( rig, expected, frames ) is { } o ) offsets.Add( o );
 		}
 		var rootError = offsets.Count == 0 ? 0f : offsets.Max( o => MathQ.AngleBetween( o, System.Numerics.Quaternion.Identity ) ) * 180f / MathF.PI;
@@ -243,7 +246,18 @@ public static class VmdlSaveService
 	}
 
 	/// <summary>Root-relative joint error: positions relative to the hips, so extracted root motion doesn't count.</summary>
-	public static float Compare( MotionRig rig, IReadOnlyList<XForm[]> expected, IReadOnlyList<XForm[]> actual )
+	/// <summary>The skeleton indices of <paramref name="names"/> and every bone below them.</summary>
+	public static HashSet<int> DrivenWithDescendants( MotionRig rig, IReadOnlySet<string> names )
+	{
+		var s = rig.Skeleton;
+		var set = new HashSet<int>();
+		for ( var b = 0; b < s.Count; b++ )
+			for ( var a = b; a >= 0; a = s[a].ParentIndex )
+				if ( names.Contains( s[a].Name ) ) { set.Add( b ); break; }
+		return set;
+	}
+
+	public static float Compare( MotionRig rig, IReadOnlyList<XForm[]> expected, IReadOnlyList<XForm[]> actual, IReadOnlySet<int> skip = null )
 	{
 		var count = Math.Min( expected.Count, actual.Count );
 		if ( count == 0 ) return float.PositiveInfinity;
@@ -258,7 +272,7 @@ public static class VmdlSaveService
 			FkUtil.ToWorld( actual[(int)MathF.Round( f * (actual.Count - 1f) / Math.Max( 1, expected.Count - 1 ) )], rig.Skeleton, wa );
 			for ( var b = 0; b < rig.Skeleton.Count; b++ )
 			{
-				if ( !rig.IsMotionBone( b ) ) continue;
+				if ( !rig.IsMotionBone( b ) || skip?.Contains( b ) == true ) continue;
 				var de = System.Numerics.Vector3.Transform( we[b].Pos - we[anchor].Pos, System.Numerics.Quaternion.Conjugate( we[anchor].Rot ) );
 				var da = System.Numerics.Vector3.Transform( wa[b].Pos - wa[anchor].Pos, System.Numerics.Quaternion.Conjugate( wa[anchor].Rot ) );
 				worst = MathF.Max( worst, (de - da).Length() );

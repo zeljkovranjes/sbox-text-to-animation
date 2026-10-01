@@ -1,47 +1,42 @@
-using System;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
 using TextToAnimation.Animation;
 using TextToAnimation.Editor.Inference.UniMate;
-using TextToAnimation.Generation;
 using Xunit;
 
 namespace TextToAnimation.Tests;
 
 public class UniMateRigTests
 {
-    sealed class Golden
-    {
-        public string[] bones { get; set; }
-        public string[] names { get; set; }
-        public int[] parents { get; set; }
-        public float[][] tpose { get; set; }
-        public float[][] restPos { get; set; }
-        public int rh { get; set; }
-        public int lh { get; set; }
-        public float scale { get; set; }
-    }
-
-    /// <summary>The shape-based joint selection reproduces the old role-table rig for the s&amp;box human bit for bit.</summary>
+    /// <summary>
+    /// The s&amp;box human goes through upstream's preparation like any rig: without skin data nothing is pruned,
+    /// every joint is a real bone with upstream's clean name, and the facing is upstream's rule.
+    /// </summary>
     [Fact]
-    public void SboxHumanMatchesTheRoleTableRigExactly()
+    public void SboxHumanGoesThroughUpstreamPreparation()
     {
-        var golden = JsonSerializer.Deserialize<Golden>(File.ReadAllText(Fixtures.Path("unimate/golden_human_unimate_rig.json")))!;
         var rig = Fixtures.HumanRig();
         var u = UniMateRig.Build(rig);
-        var s = u.Skeleton;
-        Assert.Equal(RigFamily.Humanoid, u.Family);
-        Assert.Equal(golden.bones, u.Bone.Select(b => b < 0 ? null : rig.Skeleton[b].Name).ToArray());
-        Assert.Equal(golden.names, s.CleanNames);
-        Assert.Equal(golden.parents, s.Parents);
-        Assert.Equal(golden.rh, s.RightHip);
-        Assert.Equal(golden.lh, s.LeftHip);
-        Assert.Equal(golden.scale, s.Scale);
-        for (var j = 0; j < s.Count; j++)
+        Assert.Equal(System.Math.Min(rig.Skeleton.Count, UniMateRig.MaxJoints), u.Count);
+        Assert.All(u.Bone, b => Assert.True(b >= 0));
+        for (var j = 0; j < u.Count; j++) Assert.Equal(UniMateNames.Clean(rig.Skeleton[u.Bone[j]].Name, ""), u.Skeleton.CleanNames[j]);
+        Assert.True(u.Skeleton.RightHip >= 0 && u.Skeleton.LeftHip >= 0);
+    }
+
+    /// <summary>With skin weights attached, unskinned helper bones are pruned as upstream prunes them.</summary>
+    [Fact]
+    public void UnskinnedHelpersArePrunedWithSkinData()
+    {
+        var rig = Fixtures.HumanRig();
+        var s = rig.Skeleton;
+        // skin everything except leaves named like helpers (twist/IK end bones get no weights in practice)
+        var weights = Enumerable.Range(0, s.Count).ToDictionary(b => s[b].Name,
+            b => s.Bones.Any(c => c.ParentIndex == b) || !s[b].Name.Contains("twist") ? (1.0, 10.0) : (0.0, 0.0));
+        UniMateSkin.Attach(s, weights, "citizen");
+        try
         {
-            Assert.Equal(golden.tpose[j], new[] { s.TPose[j].X, s.TPose[j].Y, s.TPose[j].Z });
-            Assert.Equal(golden.restPos[j], new[] { s.RestWorldPos[j].X, s.RestWorldPos[j].Y, s.RestWorldPos[j].Z });
+            var u = UniMateRig.Build(rig);
+            Assert.DoesNotContain(u.Bone, b => weights[s[b].Name].Item1 == 0);
         }
+        finally { UniMateSkin.Attach(s, null, ""); }
     }
 }
