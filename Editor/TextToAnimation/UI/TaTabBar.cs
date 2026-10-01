@@ -95,6 +95,11 @@ public sealed class TaTabBar : Widget
 		protected override void OnMouseEnter() => Update();
 		protected override void OnMouseLeave() => Update();
 
+		protected override void OnMousePress( MouseEvent e )
+		{
+			if ( e.LeftMouseButton ) e.Accepted = true;
+		}
+
 		protected override void OnMouseReleased( MouseEvent e )
 		{
 			base.OnMouseReleased( e );

@@ -41,6 +41,9 @@ public sealed class EditorSession
 	public MotionRig Rig { get; private set; }
 	public AnimationWorkspace Workspace { get; private set; }
 	public WorkspaceStore Store { get; private set; }
+
+	/// <summary>Prompts sent for this model, newest first (persisted with the workspace).</summary>
+	public List<PromptHistoryEntry> PromptHistory { get; private set; } = new();
 	public List<SequenceInfo> Sequences { get; private set; } = new();
 	public string VmdlText { get; private set; }
 	public List<string> LoadWarnings { get; } = new();
@@ -177,8 +180,34 @@ public sealed class EditorSession
 		Playhead = 0;
 		ActiveClip = ws.ActiveClipId is { } active ? ws.Find( active ) : ws.Clips.FirstOrDefault();
 		store.Save( ws, skeleton, Array.Empty<AnimClip>() ); // registers the workspace in the index
+		PromptHistory = store.LoadPromptHistory( ws.Id ) ?? SeedHistory( ws );
 		Notify( SessionChange.Model | SessionChange.ClipList | SessionChange.ActiveClip | SessionChange.ClipData | SessionChange.Selection | SessionChange.Undo );
 		return null;
+	}
+
+	/// <summary>A first history for workspaces made before it existed: the prompts stored on their clips.</summary>
+	static List<PromptHistoryEntry> SeedHistory( AnimationWorkspace ws )
+		=> ws.Clips.Where( c => c.Generation is { } g && g.Prompts.Any( p => !string.IsNullOrWhiteSpace( p ) ) )
+			.Select( c => new PromptHistoryEntry
+			{
+				Prompt = string.Join( " → ", c.Generation.Prompts.Where( p => !string.IsNullOrWhiteSpace( p ) ) ),
+				Mode = c.Generation.Mode, ClipIds = new List<Guid> { c.Id }, ClipName = c.Name,
+				Seed = c.Generation.Seed, CreatedUtc = c.Generation.CreatedUtc,
+			} )
+			.OrderByDescending( e => e.CreatedUtc ).ToList();
+
+	/// <summary>Remembers a sent prompt and the animations it made.</summary>
+	public void RecordPrompt( string prompt, string mode, int seed, IReadOnlyList<AnimClip> results )
+	{
+		if ( string.IsNullOrWhiteSpace( prompt ) || Workspace is null ) return;
+		PromptHistory.Insert( 0, new PromptHistoryEntry
+		{
+			Prompt = prompt.Trim(), Mode = mode, Seed = seed, CreatedUtc = DateTime.UtcNow,
+			ClipIds = results.Select( c => c.Id ).ToList(), ClipName = results.FirstOrDefault()?.Name ?? "",
+		} );
+		if ( PromptHistory.Count > WorkspaceStore.MaxPromptHistory ) PromptHistory.RemoveRange( WorkspaceStore.MaxPromptHistory, PromptHistory.Count - WorkspaceStore.MaxPromptHistory );
+		try { Store?.SavePromptHistory( Workspace.Id, PromptHistory ); }
+		catch ( Exception e ) { Log.Warning( $"[text-to-animation] prompt history not saved: {e.Message}" ); }
 	}
 
 	/// <summary>Re-reads the model's sequence list after its vmdl changed.</summary>

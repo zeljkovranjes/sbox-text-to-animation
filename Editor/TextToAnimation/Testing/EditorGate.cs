@@ -200,6 +200,13 @@ public static class EditorGate
 			Check( "UniMate generates", generated?.Origin == ClipOrigin.Generated, generated?.Name ?? "" );
 			Check( "the result opens in the editor", generated is not null && session.ActiveClip == generated );
 			Check( "the prompt clears after sending", composer.Text.Length == 0 );
+			var recorded = session.PromptHistory.FirstOrDefault();
+			Check( "the prompt is remembered in the history", recorded?.Prompt == "walk forward" && generated is not null && recorded.ClipIds.Contains( generated.Id ), recorded?.Prompt ?? "" );
+			var popup = new UI.PromptHistoryPopup( window, session, p => composer.Text = p );
+			popup.OpenAbove( composer );
+			await EngineThread.DelayOnMain( 300 );
+			Check( "the history popup opens", popup.IsValid() && popup.Visible );
+			popup.Close();
 			if ( generated is not null )
 			{
 				var issues = ClipQuality.Analyze( generated, session.Rig );
@@ -247,6 +254,7 @@ public static class EditorGate
 		var reopened = new EditorSession();
 		var error = await reopened.OpenModelAsync( asset );
 		Check( "workspace reloads", error is null && reopened.Workspace.Clips.Count == clipCount, $"{reopened.Workspace?.Clips.Count}/{clipCount}" );
+		Check( "prompt history persists", reopened.PromptHistory.Count == session.PromptHistory.Count && reopened.PromptHistory.Count > 0, $"{reopened.PromptHistory.Count}/{session.PromptHistory.Count}" );
 
 		// ---- 12. backups exist
 		var backups = Path.Combine( root, "text_to_animation", "backups" );
@@ -329,18 +337,55 @@ public static class EditorGate
 			}
 		}
 
+		// ---- 15c. every Edit section opens and shows its contents
+		window.ShowTab( 0 );
+		var folds = window.EditPanel.Children.OfType<UI.TaFold>().ToList();
+		var wasOpen = folds.Select( f => f.Open ).ToList();
+		foreach ( var f in folds ) f.Open = true;
+		await EngineThread.DelayOnMain( 400 );
+		var empty = folds.Where( f => !f.Body.Visible || f.Body.Height < 20 ).Count();
+		Check( "every Edit section opens with its contents", folds.Count >= 5 && empty == 0, $"{folds.Count} sections, {empty} empty" );
+		for ( var i = 0; i < folds.Count; i++ ) folds[i].Open = wasOpen[i];
+
+		// ---- 15d. the timeline: highlight two points, act on the highlight, undo
+		if ( generated is not null )
+		{
+			session.SelectClip( generated );
+			session.Seek( 10 );
+			window.Timeline.SetInOut( 10, true );
+			window.Timeline.SetInOut( 30, false );
+			await EngineThread.DelayOnMain( 200 );
+			Check( "I/O highlight frames on the timeline", session.Range is { Start: 10, End: 30 } && window.Timeline.ShowsSelectionBar, $"{session.Range}" );
+			var highlightBefore = generated.EvaluateFrames( session.Rig.Skeleton );
+			var spine = session.Rig.Skeleton.IndexOf( "spine_1" );
+			UI.TimelineWidget.RangeEdit( session, "Reverse selection", ( c, from, to ) => ClipOps.ReverseSection( c, session.Rig, from, to ) );
+			var after = generated.EvaluateFrames( session.Rig.Skeleton );
+			var mirrored = Maths.MathQ.AngleBetween( highlightBefore[30][spine].Rot, after[10][spine].Rot ) < 1e-3f;
+			Check( "reverse on the highlight plays those frames backwards", mirrored && session.Range is null && after.Count == highlightBefore.Count );
+			session.UndoEdit();
+			Check( "undo restores the highlight edit", Maths.MathQ.AngleBetween( highlightBefore[10][spine].Rot, generated.EvaluateFrames( session.Rig.Skeleton )[10][spine].Rot ) < 1e-4f );
+		}
+
 		// ---- 16. showcase for window screenshots (driver -Capture): each editor tab
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" )
 		{
 			session.SelectClip( generated ?? imported );
 			session.SelectBone( session.Rig.Skeleton.IndexOf( "arm_upper_R" ) );
-			session.Playing = true;
+			session.Playing = false;
+			session.Seek( 20 );
+			window.Timeline.SetInOut( 12, true );
+			window.Timeline.SetInOut( 34, false );
 			foreach ( var tab in new[] { 0, 1, 2 } )
 			{
 				window.ShowTab( tab );
 				Note( $"showcase editor tab {tab}" );
 				await EngineThread.DelayOnMain( 4000 );
 			}
+			var shown = new UI.PromptHistoryPopup( window, session, _ => { } );
+			shown.OpenAt( window.EditPrompt.ScreenRect.TopLeft + new Vector2( 300, -shown.Height - 8 ), animate: false );
+			Note( "showcase prompt history" );
+			await EngineThread.DelayOnMain( 4000 );
+			shown.Close();
 		}
 
 		return checks.Values.All( v => v );

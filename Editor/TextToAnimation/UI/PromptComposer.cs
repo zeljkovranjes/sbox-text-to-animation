@@ -56,6 +56,8 @@ public sealed class PromptComposer : Widget
 	public List<ChangeScope> ScopeChoices { get; set; } = new() { ChangeScope.WholeBody };
 	/// <summary>Allows sending an empty prompt (variations, in-betweens).</summary>
 	public bool AllowEmpty { get; set; }
+	/// <summary>Called when the user clicks the history icon (shows past prompts).</summary>
+	public Action<Widget> HistoryRequested { get; set; }
 
 	public PromptComposer( Widget parent, string placeholder ) : base( parent )
 	{
@@ -67,6 +69,7 @@ public sealed class PromptComposer : Widget
 		_field = Layout.Add( new Field( this ), 1 );
 		_box = _field.Box;
 		_box.Send = Send;
+		_field.History.OnClick = () => HistoryRequested?.Invoke( _field.History );
 		_box.TextChanged += _ => Grow();
 		_scopeChip = Layout.Add( new ChipButton( this, "", "accessibility_new", ScopeMenu, "Which part of the body the change applies to" ) );
 		_settingsChip = Layout.Add( new ChipButton( this, "", "tune", SettingsMenu, "Length, takes, quality and more" ) );
@@ -231,12 +234,18 @@ public sealed class PromptComposer : Widget
 	sealed class Field : Widget
 	{
 		public PromptBox Box { get; }
+		public IconButton History { get; }
 
 		public Field( Widget parent ) : base( parent )
 		{
 			Layout = Layout.Row();
-			Layout.Margin = new Sandbox.UI.Margin( 26, 0, 4, 0 );
+			Layout.Margin = new Sandbox.UI.Margin( 26, 0, 2, 0 );
 			Box = Layout.Add( new PromptBox( this ), 1 );
+			History = Layout.Add( new IconButton( "history", null, this )
+			{
+				FixedSize = 24, IconSize = 16, Background = Color.Transparent, Foreground = Theme.TextLight,
+				ToolTip = "Recent prompts",
+			} );
 		}
 
 		protected override void OnPaint()
@@ -296,6 +305,11 @@ public sealed class PromptComposer : Widget
 		protected override void OnMouseEnter() => Update();
 		protected override void OnMouseLeave() => Update();
 
+		protected override void OnMousePress( MouseEvent e )
+		{
+			if ( e.LeftMouseButton ) e.Accepted = true;
+		}
+
 		protected override void OnMouseReleased( MouseEvent e )
 		{
 			base.OnMouseReleased( e );
@@ -346,6 +360,11 @@ public sealed class ChipButton : Widget
 
 	protected override void OnMouseEnter() => Update();
 	protected override void OnMouseLeave() => Update();
+
+	protected override void OnMousePress( MouseEvent e )
+	{
+		if ( e.LeftMouseButton ) e.Accepted = true;
+	}
 
 	protected override void OnMouseReleased( MouseEvent e )
 	{

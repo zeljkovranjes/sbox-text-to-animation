@@ -296,6 +296,36 @@ public sealed class WorkspaceStore
         return result;
     }
 
+    // ------------------------------------------------------------------ prompt history
+
+    /// <summary>Most entries kept per workspace (oldest dropped first).</summary>
+    public const int MaxPromptHistory = 200;
+
+    string HistoryPath(Guid id) => Path.Combine(Dir(id), "prompts.json");
+
+    /// <summary>The workspace's prompt history, newest first; null when it was never written.</summary>
+    public List<PromptHistoryEntry> LoadPromptHistory(Guid id)
+    {
+        try
+        {
+            var path = HistoryPath(id);
+            if (!File.Exists(path)) return null;
+            var list = JsonSerializer.Deserialize<List<PromptHistoryEntry>>(File.ReadAllText(path), Json) ?? new List<PromptHistoryEntry>();
+            return list.Where(e => !string.IsNullOrWhiteSpace(e.Prompt)).OrderByDescending(e => e.CreatedUtc).ToList();
+        }
+        catch (Exception e) when (e is JsonException or IOException)
+        {
+            return new List<PromptHistoryEntry>(); // unreadable: start a fresh history rather than failing
+        }
+    }
+
+    /// <summary>Writes the history (newest first, capped at <see cref="MaxPromptHistory"/>).</summary>
+    public void SavePromptHistory(Guid id, IEnumerable<PromptHistoryEntry> entries)
+    {
+        var list = entries.OrderByDescending(e => e.CreatedUtc).Take(MaxPromptHistory).ToList();
+        AtomicWrite(HistoryPath(id), JsonSerializer.SerializeToUtf8Bytes(list, Json));
+    }
+
     static void AtomicWrite(string path, byte[] bytes)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -304,4 +334,15 @@ public sealed class WorkspaceStore
         if (File.Exists(path)) File.Replace(temp, path, null);
         else File.Move(temp, path);
     }
+}
+
+/// <summary>One prompt the user sent, and what it made.</summary>
+public sealed class PromptHistoryEntry
+{
+    public string Prompt { get; set; } = "";
+    public string Mode { get; set; } = "";
+    public List<Guid> ClipIds { get; set; } = new();
+    public string ClipName { get; set; } = "";
+    public int Seed { get; set; }
+    public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 }

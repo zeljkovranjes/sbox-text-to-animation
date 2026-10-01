@@ -7,7 +7,7 @@ using TextToAnimation.Editor.Session;
 
 namespace TextToAnimation.Editor.UI;
 
-/// <summary>Right-panel "Edit" tab: clip settings, cutting, speed, root motion, looping, clean-up and quality.</summary>
+/// <summary>Right-panel "Edit" tab: clip settings, speed, root motion, looping, clean-up and quality. Cutting lives on the timeline.</summary>
 public sealed class EditPanel : Widget
 {
 	readonly EditorSession _session;
@@ -18,8 +18,6 @@ public sealed class EditPanel : Widget
 	float _fpsShown = -1f;
 	readonly FloatSlider _speed;
 	readonly Label _speedLabel;
-	readonly Label _rangeLabel;
-	readonly Widget _rangeButtons;
 	readonly LineEdit _offsetForward, _offsetSide, _turn;
 	readonly Checkbox _progressive;
 	readonly FloatSlider _blend;
@@ -56,23 +54,6 @@ public sealed class EditPanel : Widget
 			if ( MathF.Abs( factor - 1f ) > 0.01f ) _session.Edit( $"Speed x{factor:0.00}", c => ClipOps.TimeScale( c, _session.Rig, factor ) );
 			_speed.Value = 1f; _speedLabel.Text = "1.00x";
 		}, "Apply the speed change" ) );
-
-		// ---- cut
-		var cutCard = Layout.Add( new TaFold( this, "content_cut", "Trim & cut", open: true, key: "edit.cutCard" ) );
-		_rangeLabel = cutCard.Content.Add( TaStyle.Muted( new Label( "", cutCard ) { WordWrap = true }, small: true ) );
-		_rangeButtons = cutCard.Content.Add( new Widget( cutCard ) { Layout = Layout.Row() } );
-		_rangeButtons.Layout.Spacing = 4;
-		_rangeButtons.Layout.Add( new TaButton( _rangeButtons, "Keep", "crop", () => RangeEdit( "Trim to selection", ( c, a, b ) => ClipOps.Crop( c, _session.Rig, a, b ) ), "Trim the clip to the selected range" ) );
-		_rangeButtons.Layout.Add( new TaButton( _rangeButtons, "Delete", "delete", () => RangeEdit( "Delete section", ( c, a, b ) => ClipOps.DeleteSection( c, _session.Rig, a, b ) ), "Remove the selected range (the motion joins up)" ) );
-		_rangeButtons.Layout.Add( new TaButton( _rangeButtons, "Repeat", "content_copy", () => RangeEdit( "Duplicate section", ( c, a, b ) => ClipOps.DuplicateSection( c, _session.Rig, a, b ) ), "Insert a copy of the selected range after it" ) );
-		var cutRow = cutCard.Content.AddRow();
-		cutRow.Spacing = 4;
-		cutRow.Add( new TaButton( cutCard, "Split here", "call_split", Split, "Split into two animations at the playhead" ), 1 );
-		cutRow.Add( new TaButton( cutCard, "Reverse", "swap_horiz", () => _session.Edit( "Reverse", c => ClipOps.Reverse( c, _session.Rig ) ), "Play the motion backwards" ), 1 );
-		var trimRow = cutCard.Content.AddRow();
-		trimRow.Spacing = 4;
-		trimRow.Add( new TaButton( cutCard, "Trim start", "first_page", () => _session.Edit( "Trim start", c => ClipOps.Crop( c, _session.Rig, _session.CurrentFrame, c.FrameCount - 1 ) ), "Remove everything before the playhead" ), 1 );
-		trimRow.Add( new TaButton( cutCard, "Trim end", "last_page", () => _session.Edit( "Trim end", c => ClipOps.Crop( c, _session.Rig, 0, _session.CurrentFrame ) ), "Remove everything after the playhead" ), 1 );
 
 		// ---- root motion
 		var rootCard = Layout.Add( new TaFold( this, "route", "Root motion", open: false, key: "edit.rootCard" ) );
@@ -132,24 +113,6 @@ public sealed class EditPanel : Widget
 		Refresh();
 	}
 
-	void RangeEdit( string label, Action<AnimClip, int, int> op )
-	{
-		if ( _session.Range is not { } r ) { _session.SetStatus( "Select a range first: Shift+drag on the timeline.", Tone.Amber ); return; }
-		_session.Edit( label, c => op( c, r.Start, r.End ) );
-		_session.SetRange( null, null );
-	}
-
-	void Split()
-	{
-		var clip = _session.ActiveClip;
-		if ( clip is null ) return;
-		var frame = _session.CurrentFrame;
-		if ( frame <= 0 || frame >= clip.FrameCount - 1 ) { _session.SetStatus( "Move the playhead inside the animation to split it.", Tone.Amber ); return; }
-		AnimClip second = null;
-		if ( _session.Edit( "Split", c => second = ClipOps.Split( c, _session.Rig, frame, c.Name + " (part 2)" ) ) && second is not null )
-			_session.AddClip( second, select: false );
-	}
-
 	void ApplyOffset()
 	{
 		static float Parse( string s ) => float.TryParse( s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v ) ? v : 0f;
@@ -176,10 +139,6 @@ public sealed class EditPanel : Widget
 			RefreshFps( clip.Fps );
 		}
 		finally { _refreshing = false; }
-		_rangeLabel.Text = _session.Range is { } r
-			? $"Selected frames {r.Start}–{r.End} ({(r.End - r.Start) / clip.Fps:0.00} s)."
-			: "Shift+drag on the timeline to select frames, then keep, delete or repeat them.";
-		_rangeButtons.Visible = _session.Range is not null;
 		RefreshIssues( clip );
 	}
 

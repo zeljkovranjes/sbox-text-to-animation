@@ -88,6 +88,7 @@ public sealed class GenerationFlow
 		{
 			var load = new EngineThread.MainThreadProgress<string>( Report );
 			var progress = new EngineThread.MainThreadProgress<GenerationProgress>( p => Report( $"{p.Stage} · {p.Fraction * 100:0}%" ) );
+			var before = _session.Workspace.Clips.ToList();
 			var results = await Service.GenerateAsync( rig, request, load, progress, _cts.Token );
 			await EngineThread.SwitchToMainThread();
 			var record = new GenerationRecord
@@ -111,6 +112,9 @@ public sealed class GenerationFlow
 				for ( var i = 0; i < results.Count; i++ )
 					AddResult( results[i], record, results.Count > 1 ? $"{baseName} {i + 1}" : baseName, i == 0 );
 			}
+			var made = _session.Workspace.Clips.Except( before ).ToList();
+			if ( replace ) made.Insert( 0, target );
+			_session.RecordPrompt( string.Join( " → ", request.Prompts.Where( p => !string.IsNullOrWhiteSpace( p ) ) ), request.Mode.ToString(), request.Seed, made );
 			var notes = results.SelectMany( r => r.Notes ).Distinct().ToList();
 			var seconds = (DateTime.UtcNow - started).TotalSeconds;
 			_session.SetStatus( notes.Count > 0 ? string.Join( " ", notes ) : $"Generated in {seconds:0} s.", notes.Count > 0 ? UI.Tone.Amber : UI.Tone.Accent );

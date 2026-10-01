@@ -216,6 +216,11 @@ public sealed class TextToAnimationWindow : Widget
 		_editPrompt.ShowLength = false;
 		_editPrompt.Submitted = prompt => _ = RunEditPromptAsync( prompt );
 		_editPrompt.StopRequested = () => Flow.Cancel();
+		_editPrompt.HistoryRequested = anchor => new PromptHistoryPopup( this, Session, prompt =>
+		{
+			_editPrompt.Text = prompt;
+			_editPrompt.FocusPrompt();
+		} ).OpenAbove( anchor );
 		_intentChip = _editPrompt.AddChip( PromptRequests.IntentName( _intent ), "bolt", ShowIntentMenu, "What the prompt does: change this animation, fill between pinned frames, variations, or a new animation" );
 		timelineCard.Layout.Add( new TaDivider( timelineCard ) );
 		var transport = timelineCard.Layout.AddRow();
@@ -233,7 +238,7 @@ public sealed class TextToAnimationWindow : Widget
 			_speed.AddItem( $"{speed:0.##}x", null, () => Session.PlaybackSpeed = speed, selected: speed == 1f );
 		}
 		_time = transport.Add( TaStyle.Muted( new Label( "", timelineCard ) ), 1 );
-		transport.Add( TaStyle.Icon( timelineCard, "help_outline", () => { }, "Timeline: Shift+drag selects frames · double click the Pinned lane pins a pose · right click for more" ) );
+		transport.Add( TaStyle.Icon( timelineCard, "help_outline", () => { }, "Timeline: drag across the lanes, or click one point and Shift+click another, to highlight frames - then keep, delete, repeat or reverse them with the bar that appears. Drag the highlight edges to adjust; I/O set them at the playhead. Right click to split or trim at a frame. Double click the Pinned lane to pin a pose." ) );
 		_timeline = timelineCard.Layout.Add( new TimelineWidget( timelineCard, Session ) { FixedHeight = 84 } );
 		_timeline.BuildContextMenu = BuildTimelineMenu;
 
@@ -277,6 +282,9 @@ public sealed class TextToAnimationWindow : Widget
 
 	/// <summary>The editor's prompt.</summary>
 	public PromptComposer EditPrompt => _editPrompt;
+
+	/// <summary>The timeline under the prompt.</summary>
+	public TimelineWidget Timeline => _timeline;
 
 	/// <summary>Opens <paramref name="clip"/> in the editor page.</summary>
 	public void OpenEditor( AnimClip clip )
@@ -523,21 +531,46 @@ public sealed class TextToAnimationWindow : Widget
 	{
 		var clip = Session.ActiveClip;
 		if ( clip is null ) return;
-		menu.AddOption( "Go to this frame", "my_location", () => Session.Seek( frame ) );
-		menu.AddOption( clip.PinnedFrames.Contains( frame ) ? "Unpin this frame" : "Pin this frame", "push_pin", () => _timeline.TogglePin( frame ) );
+		var rig = Session.Rig;
+		if ( Session.Range is { } r )
+		{
+			menu.AddHeading( $"Frames {r.Start}–{r.End}" );
+			menu.AddOption( "Keep only these frames", "crop", () => TimelineWidget.RangeEdit( Session, "Keep selection", ( c, a, b ) => ClipOps.Crop( c, rig, a, b ) ) );
+			menu.AddOption( "Delete these frames", "delete", () => TimelineWidget.RangeEdit( Session, "Delete selection", ( c, a, b ) => ClipOps.DeleteSection( c, rig, a, b ) ) );
+			menu.AddOption( "Repeat these frames", "repeat", () => TimelineWidget.RangeEdit( Session, "Repeat selection", ( c, a, b ) => ClipOps.DuplicateSection( c, rig, a, b ) ) );
+			menu.AddOption( "Reverse these frames", "swap_horiz", () => TimelineWidget.RangeEdit( Session, "Reverse selection", ( c, a, b ) => ClipOps.ReverseSection( c, rig, a, b ) ) );
+			menu.AddOption( "Copy to a new animation", "content_copy", () => TimelineWidget.CopyRangeToNewClip( Session ) );
+			menu.AddOption( "Clear highlight", "deselect", () => Session.SetRange( null, null ) );
+			menu.AddSeparator();
+		}
+		menu.AddHeading( $"Frame {frame}" );
+		var inside = frame > 0 && frame < clip.FrameCount - 1;
+		menu.AddOption( "Split here", "call_split", () => SplitAt( frame ) ).Enabled = inside;
+		menu.AddOption( "Trim everything before", "first_page", () => Session.Edit( "Trim start", c => ClipOps.Crop( c, rig, frame, c.FrameCount - 1 ) ) ).Enabled = frame > 0;
+		menu.AddOption( "Trim everything after", "last_page", () => Session.Edit( "Trim end", c => ClipOps.Crop( c, rig, 0, frame ) ) ).Enabled = frame < clip.FrameCount - 1;
+		menu.AddOption( "Set highlight start (I)", "start", () => _timeline.SetInOut( frame, true ) );
+		menu.AddOption( "Set highlight end (O)", "keyboard_tab", () => _timeline.SetInOut( frame, false ) );
+		menu.AddSeparator();
+		menu.AddOption( clip.PinnedFrames.Contains( frame ) ? "Unpin this pose" : "Pin this pose", "push_pin", () => _timeline.TogglePin( frame ) );
 		menu.AddOption( "Key selected bones here", "key", () => { Session.Seek( frame ); AddKey(); } );
 		menu.AddOption( "Delete keys here", "key_off", () => Session.Edit( $"Delete keys at {frame}", c => c.Keys.RemoveKeysAt( frame ) ) );
 		menu.AddSeparator();
-		menu.AddOption( "Split here", "call_split", () => { Session.Seek( frame ); ShowTab( 0 ); } );
-		if ( Session.Range is { } r )
-		{
-			menu.AddOption( "Keep only the selection", "crop", () => Session.Edit( "Trim to selection", c => ClipOps.Crop( c, Session.Rig, r.Start, r.End ) ) );
-			menu.AddOption( "Delete the selection", "delete", () => Session.Edit( "Delete section", c => ClipOps.DeleteSection( c, Session.Rig, r.Start, r.End ) ) );
-			menu.AddOption( "Repeat the selection", "content_copy", () => Session.Edit( "Duplicate section", c => ClipOps.DuplicateSection( c, Session.Rig, r.Start, r.End ) ) );
-			menu.AddOption( "Clear selection", "deselect", () => Session.SetRange( null, null ) );
-		}
-		menu.AddSeparator();
+		menu.AddOption( "Reverse the whole animation", "swap_horiz", () => Session.Edit( "Reverse", c => ClipOps.Reverse( c, rig ) ) );
 		menu.AddOption( "Zoom to fit", "fit_screen", _timeline.ResetZoom );
+	}
+
+	/// <summary>Splits the open animation at <paramref name="frame"/>; the second half becomes a new animation.</summary>
+	void SplitAt( int frame )
+	{
+		var clip = Session.ActiveClip;
+		if ( clip is null ) return;
+		if ( frame <= 0 || frame >= clip.FrameCount - 1 ) { SetStatus( "Split inside the animation, not at its first or last frame.", Tone.Amber ); return; }
+		AnimClip second = null;
+		if ( Session.Edit( "Split", c => second = ClipOps.Split( c, Session.Rig, frame, c.Name + " (part 2)" ) ) && second is not null )
+		{
+			Session.AddClip( second, select: false );
+			SetStatus( $"Split at frame {frame}: the rest is now \"{second.Name}\".", Tone.Accent );
+		}
 	}
 
 	void AddKey()
@@ -569,6 +602,8 @@ public sealed class TextToAnimationWindow : Widget
 			case KeyCode.D when e.HasCtrl && editor: if ( Session.ActiveClip is { } c ) Session.Duplicate( c ); break;
 			case KeyCode.K when editor: AddKey(); break;
 			case KeyCode.P when editor: _timeline.TogglePin( Session.CurrentFrame ); break;
+			case KeyCode.I when editor: _timeline.SetInOut( Session.CurrentFrame, true ); break;
+			case KeyCode.O when editor: _timeline.SetInOut( Session.CurrentFrame, false ); break;
 			case KeyCode.Escape: Session.SelectBone( null ); Session.SetRange( null, null ); break;
 			default: handled = false; break;
 		}

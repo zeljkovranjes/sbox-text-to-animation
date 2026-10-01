@@ -48,6 +48,26 @@ public class ClipOpsTests
     }
 
     [Fact]
+    public void ReverseSectionPlaysOnlyTheSelectionBackwards()
+    {
+        var clip = Fixtures.Walk(_rig);
+        var original = AnimClip.CopyFrames(clip.Frames);
+        clip.PinnedFrames.Add(12);
+        clip.PinnedFrames.Add(40);
+        ClipOps.ReverseSection(clip, _rig, 10, 29);
+        Assert.Equal(original.Count, clip.FrameCount);
+        AssertContinuousPath(clip);
+        var spine = _rig.Skeleton.IndexOf("spine_1");
+        // inside the section, frame 10 + i now has the pose of frame 29 - i (local, non-root bones are unchanged by splicing)
+        for (var i = 0; i < 20; i++)
+            Assert.True(MathQ.AngleBetween(original[29 - i][spine].Rot, clip.Frames[10 + i][spine].Rot) < 1e-4f, $"frame {10 + i}");
+        // before the section nothing moved
+        Assert.Equal(original[5][_rig.HipsIndex], clip.Frames[5][_rig.HipsIndex]);
+        // pins inside the section are mirrored, pins outside stay
+        Assert.Equal(new[] { 27, 40 }, clip.PinnedFrames.ToArray());
+    }
+
+    [Fact]
     public void DuplicateSectionContinuesThePathForward()
     {
         var clip = Fixtures.Walk(_rig);

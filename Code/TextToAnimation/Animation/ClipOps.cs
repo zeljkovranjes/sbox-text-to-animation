@@ -88,6 +88,22 @@ public static class ClipOps
         Finish(clip, rig);
     }
 
+    /// <summary>Plays frames [start, end] backwards in place; the rest of the clip continues the root path.</summary>
+    public static void ReverseSection(AnimClip clip, MotionRig rig, int start, int end)
+    {
+        CheckRange(clip, start, end);
+        if (start == 0 && end == clip.FrameCount - 1) { Reverse(clip, rig); return; }
+        if (end - start < 1) return;
+        var head = clip.Frames.GetRange(0, start);
+        var middle = AnimClip.CopyFrames(clip.Frames.GetRange(start, end - start + 1));
+        middle.Reverse();
+        var tail = clip.Frames.GetRange(end + 1, clip.FrameCount - end - 1);
+        clip.Frames = Splice(rig, Splice(rig, head, middle), tail);
+        foreach (var e in clip.Events.Where(e => e.Automatic && e.Frame >= start && e.Frame <= end).ToList()) clip.Events.Remove(e);
+        Remap(clip, f => f >= start && f <= end ? start + end - f : f);
+        Finish(clip, rig);
+    }
+
     /// <summary>Changes the sample rate, keeping the duration (motion is resampled).</summary>
     public static void Resample(AnimClip clip, MotionRig rig, float newFps)
     {

@@ -80,4 +80,41 @@ public class WorkspaceStoreTests : IDisposable
         var data = WorkspaceStore.SerializeFrames(clip, _rig.Skeleton);
         Assert.Throws<EndOfStreamException>(() => WorkspaceStore.DeserializeFrames(data.Take(data.Length / 2).ToArray(), _rig.Skeleton, out _));
     }
+
+    [Fact]
+    public void PromptHistoryRoundTripsNewestFirstAndIsCapped()
+    {
+        var store = new WorkspaceStore(_dir);
+        var ws = new AnimationWorkspace { ModelPath = "models/hero.vmdl" };
+        store.Save(ws, _rig.Skeleton);
+        Assert.Null(store.LoadPromptHistory(ws.Id)); // never written: the session seeds it from the clips
+
+        var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var clipId = Guid.NewGuid();
+        var entries = Enumerable.Range(0, WorkspaceStore.MaxPromptHistory + 25)
+            .Select(i => new PromptHistoryEntry { Prompt = $"prompt {i}", Mode = "TextToMotion", Seed = i, CreatedUtc = start.AddMinutes(i), ClipIds = { clipId }, ClipName = "Walk" })
+            .ToList();
+        store.SavePromptHistory(ws.Id, entries);
+
+        var loaded = store.LoadPromptHistory(ws.Id);
+        Assert.Equal(WorkspaceStore.MaxPromptHistory, loaded.Count);
+        Assert.Equal($"prompt {WorkspaceStore.MaxPromptHistory + 24}", loaded[0].Prompt); // newest first
+        Assert.Equal(clipId, loaded[0].ClipIds.Single());
+        Assert.Equal("Walk", loaded[0].ClipName);
+        Assert.True(loaded.Zip(loaded.Skip(1)).All(p => p.First.CreatedUtc >= p.Second.CreatedUtc));
+    }
+
+    [Fact]
+    public void CorruptPromptHistoryStartsFreshInsteadOfFailing()
+    {
+        var store = new WorkspaceStore(_dir);
+        var ws = new AnimationWorkspace { ModelPath = "models/hero.vmdl" };
+        store.Save(ws, _rig.Skeleton);
+        File.WriteAllText(Path.Combine(_dir, ws.Id.ToString("N"), "prompts.json"), "{ not json");
+        var loaded = store.LoadPromptHistory(ws.Id);
+        Assert.NotNull(loaded);
+        Assert.Empty(loaded);
+        store.SavePromptHistory(ws.Id, new[] { new PromptHistoryEntry { Prompt = "jump" }, new PromptHistoryEntry { Prompt = "  " } });
+        Assert.Equal(new[] { "jump" }, store.LoadPromptHistory(ws.Id).Select(e => e.Prompt)); // blank prompts are dropped
+    }
 }
