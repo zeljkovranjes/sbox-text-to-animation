@@ -1,0 +1,18 @@
+{
+  "Title": "Text to Animation",
+  "Type": "library",
+  "Org": "notpointless",
+  "Ident": "chomnr_text_to_animation",
+  "Schema": 1,
+  "IncludeSourceFiles": false,
+  "Resources": null,
+  "PackageReferences": [],
+  "EditorReferences": null,
+  "Mounts": null,
+  "IsStandaloneOnly": false,
+  "Metadata": {
+    "Summary": "Generate and edit animations for any s&box model from text - UniMate built into a native animation editor, pure C#.",
+    "Description": "Text to Animation turns prompts like \"walk cautiously forward, look behind, then run\" into real, compiled s&box animations for your own models, and gives you a clip editor to trim, loop, fix root motion and pose bones before saving straight back into the vmdl.\n\nEverything runs inside the editor in pure C# - no Python, no external tools. The UniMate model is downloaded once with one click.",
+    "WebsiteUrl": ""
+  }
+}
