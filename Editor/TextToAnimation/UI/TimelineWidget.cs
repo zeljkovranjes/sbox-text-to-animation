@@ -107,16 +107,16 @@ public sealed class TimelineWidget : Widget
 		// range selection
 		if ( _session.Range is { } range )
 		{
-			var x0 = FrameToX( range.Start ); var x1 = FrameToX( range.End );
+			// only the lanes: the ruler numbers and the lane labels stay clear
+			var x0 = MathF.Max( FrameToX( range.Start ), TrackLeft ); var x1 = MathF.Max( FrameToX( range.End ), TrackLeft );
 			Paint.ClearPen();
 			Paint.SetBrush( TaStyle.Accent.WithAlpha( .2f ) );
 			Paint.DrawRect( new Rect( x0, RulerHeight, Math.Max( 2, x1 - x0 ), Height - RulerHeight ) );
-			Paint.SetBrush( TaStyle.Accent.WithAlpha( .35f ) );
-			Paint.DrawRect( new Rect( x0, 0, Math.Max( 2, x1 - x0 ), RulerHeight ) );
-			foreach ( var x in new[] { x0, x1 } )
+			foreach ( var x in new[] { FrameToX( range.Start ), FrameToX( range.End ) } )
 			{
+				if ( x < TrackLeft ) continue;
 				Paint.SetPen( TaStyle.AccentLight, 2 );
-				Paint.DrawLine( new Vector2( x, 0 ), new Vector2( x, Height ) );
+				Paint.DrawLine( new Vector2( x, RulerHeight ), new Vector2( x, Height ) );
 				Paint.ClearPen();
 				Paint.SetBrush( TaStyle.AccentLight );
 				Paint.DrawRect( new Rect( x - 3, Height - 16, 6, 12 ), 2 ); // grab handle
