@@ -14,7 +14,8 @@ param(
     [string]$SboxRoot = "C:\Program Files (x86)\Steam\steamapps\common\sbox",
     [int]$TimeoutSec = 900,
     [switch]$Clean,
-    [switch]$Capture   # screenshot the gate editor's own Text to Animation window (PrintWindow) + showcase pause
+    [switch]$Capture,  # screenshot the gate editor's own Text to Animation window (PrintWindow) + showcase pause
+    [string]$Creatures = ""  # folder of <name>/<name>.fbx rigs to build vmdls from, animate and save (creature checks)
 )
 $ErrorActionPreference = "Stop"
 $repoRoot   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -52,7 +53,7 @@ if (-not (Test-Path $libDir)) { New-Item -ItemType Junction -Path $libDir -Value
 # fresh state: previous outputs, workspaces and backups of the scratch project
 Remove-Item $resultPath -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $PSScriptRoot "gate_shots") -Recurse -Force -ErrorAction SilentlyContinue
-foreach ($d in "Assets\t2a_gate", "Assets\t2a_gate_export", "Assets\models", "text_to_animation") {
+foreach ($d in "Assets\t2a_gate", "Assets\t2a_gate_export", "Assets\models", "Assets\t2a_creatures", "text_to_animation") {
     $p = Join-Path $scratch $d; if (Test-Path $p) { Remove-Item -Recurse -Force $p }
 }
 Set-Content -Path "$resultPath.arm" -Value (Get-Date -Format o) -Encoding ascii
@@ -60,10 +61,11 @@ $preLogLen = 0; if (Test-Path $sboxLog) { $preLogLen = (Get-Item $sboxLog).Lengt
 
 $env:T2A_GATE = $resultPath
 if ($Capture) { $env:T2A_GATE_SHOWCASE = "1" }
+if ($Creatures) { $env:T2A_GATE_CREATURES = (Resolve-Path $Creatures).Path }
 try {
     Write-Host "Launching: `"$sboxExe`" -project `"$sbproj`""
     $proc = Start-Process -FilePath $sboxExe -ArgumentList @("-project", "`"$sbproj`"") -WorkingDirectory $SboxRoot -PassThru
-} finally { Remove-Item Env:T2A_GATE -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_SHOWCASE -ErrorAction SilentlyContinue }
+} finally { Remove-Item Env:T2A_GATE -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_SHOWCASE -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_CREATURES -ErrorAction SilentlyContinue }
 $captureProc = $null
 if ($Capture) {
     $captureProc = Start-Process powershell -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "capture_windows.ps1"), "-ProcessId", $proc.Id, "-IntervalSec", "3", "-MaxShots", "200") -WindowStyle Hidden -PassThru

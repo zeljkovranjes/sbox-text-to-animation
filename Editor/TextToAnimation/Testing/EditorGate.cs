@@ -367,6 +367,9 @@ public static class EditorGate
 			Check( "undo restores the highlight edit", Maths.MathQ.AngleBetween( highlightBefore[10][spine].Rot, generated.EvaluateFrames( session.Rig.Skeleton )[10][spine].Rot ) < 1e-4f );
 		}
 
+		// ---- 15e. creatures from FBX: vmdl, compile, size, generate, save (appended), engine playback
+		await RunCreatureChecksAsync( window, assets, shots, Check );
+
 		// ---- 16. showcase for window screenshots (driver -Capture): each editor tab
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" )
 		{
@@ -493,6 +496,207 @@ public static class EditorGate
 		var result = await task;
 		await EngineThread.SwitchToMainThread();
 		check( "generation can be cancelled", wasBusy && !result && !session.Busy && session.Workspace.Clips.Count == clipsBefore, $"busy={wasBusy} result={result}" );
+	}
+
+	/// <summary>A creature from an FBX: prompts to animate it with, and its real size (metres, from the FBX export).</summary>
+	sealed record Creature( string Name, string[] Prompts, float HeightMeters );
+
+	static readonly Creature[] Creatures =
+	{
+		new( "fox", new[] { "walk forward", "jump" }, 0.511f ),
+		new( "brainstem", new[] { "walk forward", "wave" }, 1.7f ),
+		new( "shark", new[] { "swim forward", "turn left" }, 0.889f ),
+		new( "octopus", new[] { "wave its tentacles", "crawl forward" }, 0.687f ),
+	};
+
+	/// <summary>The vmdl a user would make for a rigged FBX (centimetres, like the Citizen sources).</summary>
+	static string CreatureVmdl( string fbxAssetPath ) => $$"""
+<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:modeldoc30:version{8c2d7a91-9c42-4bf0-883a-5a3b1762d4f1} -->
+{
+	rootNode =
+	{
+		_class = "RootNode"
+		children =
+		[
+			{
+				_class = "ModelModifierList"
+				children =
+				[
+					{
+						_class = "ModelModifier_ScaleAndMirror"
+						scale = 0.3937
+						mirror_x = false
+						mirror_y = false
+						mirror_z = false
+						flip_bone_forward = false
+						swap_left_and_right_bones = false
+					},
+				]
+			},
+			{
+				_class = "RenderMeshList"
+				children =
+				[
+					{
+						_class = "RenderMeshFile"
+						filename = "{{fbxAssetPath}}"
+						import_translation = [ 0.0, 0.0, 0.0 ]
+						import_rotation = [ 0.0, 0.0, 0.0 ]
+						import_scale = 1.0
+						align_origin_x_type = "None"
+						align_origin_y_type = "None"
+						align_origin_z_type = "None"
+						parent_bone = ""
+						import_filter =
+						{
+							exclude_by_default = false
+							exception_list = [  ]
+						}
+					},
+				]
+			},
+			{
+				_class = "AnimationList"
+				children = [  ]
+			},
+		]
+		model_archetype = ""
+		primary_associated_entity = ""
+		anim_graph_name = ""
+		base_model_name = ""
+	}
+}
+""";
+
+	/// <summary>
+	/// For each creature FBX (T2A_GATE_CREATURES folder): make a vmdl, compile it, check its size, open it, generate
+	/// two animations, save both (appended, the model's own nodes untouched, engine playback verified) and render
+	/// the bind pose and the compiled animations for review.
+	/// </summary>
+	static async Task RunCreatureChecksAsync( TextToAnimationWindow window, string assets, string shots, Action<string, bool, string> check )
+	{
+		var source = Environment.GetEnvironmentVariable( "T2A_GATE_CREATURES" );
+		if ( string.IsNullOrEmpty( source ) || !Directory.Exists( source ) ) { Note( "no creature folder - creature checks skipped" ); return; }
+		var session = window.Session;
+		var report = new Dictionary<string, object>();
+		foreach ( var creature in Creatures )
+		{
+			var fbx = Path.Combine( source, creature.Name, creature.Name + ".fbx" );
+			if ( !File.Exists( fbx ) ) { check( $"{creature.Name}: FBX present", false, fbx ); continue; }
+			var folder = Path.Combine( assets, "t2a_creatures", creature.Name );
+			Directory.CreateDirectory( folder );
+			File.Copy( fbx, Path.Combine( folder, creature.Name + ".fbx" ), true );
+			var vmdlPath = Path.Combine( folder, creature.Name + ".vmdl" );
+			var vmdl = CreatureVmdl( $"t2a_creatures/{creature.Name}/{creature.Name}.fbx" );
+			File.WriteAllText( vmdlPath, vmdl );
+			var compile = await VmdlCompiler.RegisterAndCompileAsync( vmdlPath, new[] { Path.Combine( folder, creature.Name + ".fbx" ) } );
+			await EngineThread.SwitchToMainThread();
+			check( $"{creature.Name}: vmdl from FBX compiles", compile.Compiled, compile.Error ?? "" );
+			if ( !compile.Compiled ) continue;
+
+			var error = await window.OpenModelAsync( compile.Asset );
+			await EngineThread.SwitchToMainThread();
+			if ( error is not null ) { check( $"{creature.Name}: opens", false, error ); continue; }
+			var model = session.Model;
+			var heightIn = model.Bounds.Size.z;
+			var expectedIn = creature.HeightMeters * 100f * 0.3937f;
+			check( $"{creature.Name}: compiled size matches the FBX", MathF.Abs( heightIn - expectedIn ) < 0.15f * expectedIn, $"{heightIn:0.0} in vs {expectedIn:0.0} in" );
+			var rig = session.Rig;
+			var a = rig.Analysis;
+			report[creature.Name] = new
+			{
+				bones = rig.Skeleton.Count, humanoid = rig.IsHumanoid, family = Inference.UniMate.UniMateRig.DetectFamily( rig ).ToString(), facing = a.Facing.ToString(),
+				limbs = a.Limbs.Select( l => $"{l.Kind} {l.Side}: {l.Chain.Count}" ).ToList(), problems = rig.Problems.ToList(),
+			};
+			Set( "creatures", report );
+			DumpSkeleton( rig, Path.Combine( shots, $"creature_{creature.Name}_skeleton.json" ) );
+			var problems = UniMateRigProblems( rig );
+			check( $"{creature.Name}: skeleton read for generation", rig.Skeleton.Count > 4 && problems.Count == 0, $"{rig.Skeleton.Count} bones; {string.Join( " ", problems )}" );
+
+			// the compiled model as modeldoc shows it: bind pose, no animation
+			session.SelectClip( null );
+			window.Viewport.FrameCharacter();
+			await EngineThread.DelayOnMain( 600 );
+			File.WriteAllBytes( Path.Combine( shots, $"creature_{creature.Name}_bind.png" ), window.Viewport.RenderToPng() );
+
+			// generate two animations and save both into the vmdl
+			var made = new List<AnimClip>();
+			foreach ( var prompt in creature.Prompts )
+			{
+				window.SetIntent( UI.EditIntent.New );
+				window.EditPrompt.Options.Seconds = 2f;
+				window.EditPrompt.Options.Steps = 12;
+				window.EditPrompt.Options.Takes = 1;
+				window.EditPrompt.Options.Seed = 3;
+				var before = session.Workspace.Clips.ToList();
+				await window.RunEditPromptAsync( prompt );
+				await EngineThread.SwitchToMainThread();
+				var clip = session.Workspace.Clips.Except( before ).FirstOrDefault();
+				if ( clip is not null ) made.Add( clip );
+			}
+			foreach ( var clip in made ) DumpMotion( rig, clip, Path.Combine( shots, $"creature_{creature.Name}_{clip.EffectiveSequenceName}.motion.json" ) );
+			check( $"{creature.Name}: generates from text", made.Count == creature.Prompts.Length && made.All( c => c.FrameCount > 30 ), string.Join( ", ", made.Select( c => c.Name ) ) );
+			if ( made.Count == 0 ) continue;
+			var errors = made.SelectMany( c => ClipQuality.Analyze( c, rig ) ).Where( q => q.Severity == IssueSeverity.Error ).Select( q => q.Code ).ToList();
+			check( $"{creature.Name}: generated animations have no quality errors", errors.Count == 0, string.Join( ",", errors ) );
+
+			var savedAll = true;
+			foreach ( var clip in made )
+			{
+				var ok = await window.Save.SaveAsync( clip );
+				await EngineThread.SwitchToMainThread();
+				savedAll &= ok;
+			}
+			check( $"{creature.Name}: saves compile and play back like the preview", savedAll, "" );
+			await session.RefreshModelAsync();
+			var text = File.ReadAllText( vmdlPath );
+			var names = made.Select( c => c.EffectiveSequenceName ).ToList();
+			var appended = names.All( n => session.Model.AnimationNames.Contains( n ) ) && Kv3Sequences( vmdlPath ).Count( n => names.Contains( n ) ) == names.Count;
+			var untouched = text.Contains( $"t2a_creatures/{creature.Name}/{creature.Name}.fbx" ) && text.Contains( "scale = 0.3937" );
+			check( $"{creature.Name}: animations appended, model nodes untouched", appended && untouched, $"{string.Join( ",", session.Model.AnimationNames.Take( 6 ) )}" );
+
+			// the compiled animation as the engine plays it (sampled back from the model) for review
+			var played = await session.ImportSequenceAsync( names[0] );
+			await EngineThread.SwitchToMainThread();
+			session.SelectClip( played );
+			window.Viewport.FrameCharacter();
+			foreach ( var f in new[] { 0, played.FrameCount / 2, played.FrameCount - 1 } )
+			{
+				session.Playing = false;
+				session.Seek( f );
+				await EngineThread.DelayOnMain( 350 );
+				File.WriteAllBytes( Path.Combine( shots, $"creature_{creature.Name}_played_{f:00}.png" ), window.Viewport.RenderToPng() );
+			}
+		}
+	}
+
+	/// <summary>World positions of every bone on every frame (for offline review of generated motion).</summary>
+	static void DumpMotion( MotionRig rig, AnimClip clip, string path )
+	{
+		try
+		{
+			var world = new Maths.XForm[rig.Skeleton.Count];
+			var frames = new List<float[]>();
+			foreach ( var pose in clip.EvaluateFrames( rig.Skeleton ) )
+			{
+				Processing.FkUtil.ToWorld( pose, rig.Skeleton, world );
+				frames.Add( world.SelectMany( x => new[] { x.Pos.X, x.Pos.Y, x.Pos.Z } ).ToArray() );
+			}
+			var dump = new
+			{
+				names = rig.Skeleton.Bones.Select( b => b.Name ).ToList(),
+				parents = rig.Skeleton.Bones.Select( b => b.ParentIndex ).ToList(),
+				fps = clip.Fps, prompt = clip.Generation?.Prompts.FirstOrDefault(), frames,
+			};
+			File.WriteAllText( path, JsonSerializer.Serialize( dump ) );
+		}
+		catch ( Exception e ) { Note( $"motion dump failed: {e.Message}" ); }
+	}
+
+	static List<string> UniMateRigProblems( MotionRig rig )
+	{
+		try { return Inference.UniMate.UniMateRig.Validate( rig ); }
+		catch ( Exception e ) { return new List<string> { e.Message }; }
 	}
 
 	/// <summary>Writes the engine skeleton (rest locals) and what the shape analysis made of it, for offline tests.</summary>
