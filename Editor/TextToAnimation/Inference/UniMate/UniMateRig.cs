@@ -3,18 +3,20 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using TextToAnimation.Animation;
-using TextToAnimation.Mapping;
+using TextToAnimation.Generation;
 using TextToAnimation.Maths;
 using TextToAnimation.Processing;
+using TextToAnimation.Rig;
 
 namespace TextToAnimation.Editor.Inference.UniMate;
 
 using Vector3 = System.Numerics.Vector3; // s&box declares a global Vector3 that would shadow System.Numerics
 
 /// <summary>
-/// The bridge between a workspace skeleton (engine space) and UniMate: which bones the model animates
-/// (the mapped humanoid body, plus virtual tip joints so leaf bones such as the head, hands and toes get a
-/// rotation), their training-vocabulary names, and conversion of poses both ways.
+/// The bridge between a workspace skeleton (engine space) and UniMate: which bones the model animates, their
+/// training-vocabulary names, the virtual tip joints that give leaf bones a rotation, and conversion of poses
+/// both ways. Joints are chosen from the skeleton's shape (<see cref="RigAnalysis"/>), so any armature works
+/// whatever its bones are called: humans, birds, dinosaurs, quadrupeds, snakes.
 /// </summary>
 public sealed class UniMateRig
 {
@@ -27,112 +29,220 @@ public sealed class UniMateRig
 
 	public int Count => Skeleton.Count;
 
-	static readonly (BoneRole Role, string Name)[] Roles =
-	{
-		(BoneRole.Hips, "Hips"), (BoneRole.Spine0, "Spine"), (BoneRole.Spine1, "Spine"), (BoneRole.Spine2, "Spine"),
-		(BoneRole.Spine3, "Spine"), (BoneRole.Spine4, "Spine"), (BoneRole.Neck, "Neck"), (BoneRole.Head, "Head"),
-		(BoneRole.ClavicleL, "Left Shoulder"), (BoneRole.UpperArmL, "Left Upper Arm"), (BoneRole.LowerArmL, "Left Forearm"), (BoneRole.HandL, "Left Hand"),
-		(BoneRole.ClavicleR, "Right Shoulder"), (BoneRole.UpperArmR, "Right Upper Arm"), (BoneRole.LowerArmR, "Right Forearm"), (BoneRole.HandR, "Right Hand"),
-		(BoneRole.UpperLegL, "Left Thigh"), (BoneRole.LowerLegL, "Left Shin"), (BoneRole.FootL, "Left Foot"), (BoneRole.ToeL, "Left Toe"),
-		(BoneRole.UpperLegR, "Right Thigh"), (BoneRole.LowerLegR, "Right Shin"), (BoneRole.FootR, "Right Foot"), (BoneRole.ToeR, "Right Toe"),
-	};
+	/// <summary>UniMate supports at most this many joints (virtual tips included).</summary>
+	public const int MaxJoints = 70;
 
-	UniMateRig( MotionRig motion, UniMateSkeleton skeleton, int[] bone, Vector3[] tipLocal )
+	/// <summary>Which normalisation statistics (training data family) the rig uses.</summary>
+	public RigFamily Family { get; }
+
+	/// <summary>The workspace bone carrying the root trajectory (UniMate joint 0, the hips).</summary>
+	public int RootBone => Bone[0];
+
+	UniMateRig( MotionRig motion, UniMateSkeleton skeleton, int[] bone, Vector3[] tipLocal, RigFamily family )
 	{
 		Motion = motion;
 		Skeleton = skeleton;
 		Bone = bone;
 		_tipLocal = tipLocal;
+		Family = family;
 	}
 
 	/// <summary>Problems that prevent UniMate from animating this rig (empty = fine).</summary>
 	public static List<string> Validate( MotionRig rig )
 	{
 		var problems = new List<string>();
-		if ( !rig.IsHumanoid ) problems.Add( "UniMate needs a humanoid skeleton (hips, spine, legs, arms and head)." );
+		try { Build( rig ); }
+		catch ( Exception e ) when ( e is InvalidOperationException or ArgumentException ) { problems.Add( e.Message ); }
 		return problems;
 	}
 
-	public static UniMateRig Build( MotionRig rig )
+	/// <summary>The training family a rig's motion resembles: humans (Mixamo), animals and creatures (Truebones), anything else (Objaverse).</summary>
+	public static RigFamily DetectFamily( MotionRig rig )
 	{
-		var problems = Validate( rig );
-		if ( problems.Count > 0 ) throw new InvalidOperationException( string.Join( " ", problems ) );
+		var a = rig.Analysis;
+		if ( a.IsHumanoid ) return RigFamily.Humanoid;
+		if ( a.Limbs.Any( l => l.Kind is LimbKind.Leg or LimbKind.FrontLeg or LimbKind.Wing )
+			|| a.Tails.Any( t => t.Count > 0 && a.Part[t[0]] == RigPart.Tail )
+			|| a.Facing == RigFacing.BodyAxis )
+			return RigFamily.Animal;
+		return RigFamily.Object;
+	}
+
+	/// <summary>
+	/// Chooses the joints UniMate animates, from the rig's shape (bone names don't matter): for a humanoid the
+	/// core body (hips, spine, neck, head, arms to the hands, legs to the toes) like UniMate's Mixamo training
+	/// rigs; for any other armature every body bone (helpers, IK targets and twist bones left out), trimmed to
+	/// <see cref="MaxJoints"/>. Leaf bones get a virtual tip joint so they have a rotation.
+	/// </summary>
+	public static UniMateRig Build( MotionRig rig, RigFamily family = RigFamily.Auto )
+	{
+		var a = rig.Analysis;
+		if ( family == RigFamily.Auto ) family = DetectFamily( rig );
+		if ( !a.InBody[a.BodyRoot] ) throw new InvalidOperationException( "UniMate couldn't find the body of this skeleton (it has no connected bones)." );
+		return a.IsHumanoid ? BuildHumanoid( rig, family ) : BuildGeneric( rig, family );
+	}
+
+	static UniMateRig BuildHumanoid( MotionRig rig, RigFamily family )
+	{
+		var a = rig.Analysis;
 		var s = rig.Skeleton;
 		var rest = s.RestWorld;
-
-		// mapped body bones
-		var bones = new List<int>();
-		var names = new List<string>();
-		foreach ( var (role, name) in Roles )
+		var bones = new List<int> { a.BodyRoot };
+		foreach ( var b in a.SpineChain )
 		{
-			if ( rig.Bone( role ) is not int b || bones.Contains( b ) ) continue;
-			bones.Add( b ); names.Add( name );
+			bones.Add( b );
+			if ( b == a.Head ) break;
 		}
-		// parents: nearest selected ancestor
-		var parents = bones.Select( b =>
+		var arms = a.Limbs.Where( l => l.Kind == LimbKind.Arm ).OrderBy( l => l.Side == BoneSide.Left ? 0 : 1 ).ToList();
+		var legs = a.Limbs.Where( l => l.Kind == LimbKind.Leg ).OrderBy( l => l.Side == BoneSide.Left ? 0 : 1 ).ToList();
+		foreach ( var limb in arms.Concat( legs ) ) bones.AddRange( limb.Chain );
+		var j = new JointList( rig, bones );
+
+		j.AddTip( a.Head, "Head End", 0.9f );
+		foreach ( var arm in arms ) j.AddTip( arm.Chain[^1], a.Label[arm.Chain[^1]] + " End", 0.6f );
+		foreach ( var leg in legs )
 		{
-			for ( var p = s[b].ParentIndex; p >= 0; p = s[p].ParentIndex )
+			var side = leg.Side == BoneSide.Left ? "Left" : "Right";
+			j.AddTip( leg.Chain[^1], leg.Chain.Count >= 4 ? side + " Toe End" : side + " Toe", 0.6f );
+		}
+		var rh = bones.IndexOf( legs.First( l => l.Side == BoneSide.Right ).Chain[0] );
+		var lh = bones.IndexOf( legs.First( l => l.Side == BoneSide.Left ).Chain[0] );
+		var skeleton = UniMateSkeleton.Build( j.Names, j.Parents, j.Pos, j.Rot, rh, lh, rig.Forward, UniMateSkeleton.EngineUpBasis );
+		return Finish( rig, skeleton, j, family );
+	}
+
+	static UniMateRig BuildGeneric( MotionRig rig, RigFamily family )
+	{
+		var a = rig.Analysis;
+		var s = rig.Skeleton;
+		var rest = s.RestWorld;
+		var selected = new HashSet<int>( a.BodySubtree( a.BodyRoot ) );
+		var keep = new HashSet<int> { a.BodyRoot };
+		if ( a.Head >= 0 ) keep.Add( a.Head );
+		if ( a.FacingRight >= 0 ) { keep.Add( a.FacingRight ); keep.Add( a.FacingLeft ); }
+		foreach ( var limb in a.Limbs ) keep.Add( limb.Chain[0] );
+
+		int Count() => selected.Count + selected.Count( b => !Below( s, selected, b ).Any() );
+		// over budget: drop fingers and toes, then head details, then thin long single chains (tails, necks)
+		if ( Count() > MaxJoints ) selected.RemoveWhere( b => a.Part[b] == RigPart.Digit && !keep.Contains( b ) );
+		if ( Count() > MaxJoints ) selected.RemoveWhere( b => a.Part[b] == RigPart.HeadPart && !keep.Contains( b ) );
+		while ( Count() > MaxJoints )
+		{
+			var candidate = selected
+				.Where( b => !keep.Contains( b ) && Below( s, selected, b ).Count() == 1 )
+				.Where( b => s[b].ParentIndex >= 0 && selected.Contains( s[b].ParentIndex ) && Below( s, selected, s[b].ParentIndex ).Count() == 1 )
+				.OrderBy( b => (rest[b].Pos - rest[s[b].ParentIndex].Pos).Length() ).ThenBy( b => b )
+				.FirstOrDefault( -1 );
+			if ( candidate < 0 ) break;
+			selected.Remove( candidate );
+		}
+		var total = Count();
+		if ( total > MaxJoints )
+			throw new InvalidOperationException( $"This skeleton has too many bones for UniMate ({total} joints after simplifying, at most {MaxJoints})." );
+
+		// breadth-first from the hips, children in skeleton order
+		var bones = new List<int>();
+		var queue = new Queue<int>();
+		queue.Enqueue( a.BodyRoot );
+		while ( queue.Count > 0 )
+		{
+			var b = queue.Dequeue();
+			bones.Add( b );
+			foreach ( var c in Below( s, selected, b ) ) queue.Enqueue( c );
+		}
+		if ( bones.Count < 3 ) throw new InvalidOperationException( $"UniMate needs a skeleton with at least 3 connected bones; this one has {bones.Count}." );
+		var j = new JointList( rig, bones );
+		foreach ( var b in bones )
+		{
+			if ( Below( s, selected, b ).Any() ) continue;
+			var label = a.Label[b];
+			j.AddTip( b, label.EndsWith( " End", StringComparison.Ordinal ) ? label : label + " End", b == a.Head ? 0.9f : 0.6f );
+		}
+
+		var rh = a.FacingRight >= 0 ? bones.IndexOf( a.FacingRight ) : -1;
+		var lh = a.FacingLeft >= 0 ? bones.IndexOf( a.FacingLeft ) : -1;
+		if ( rh < 0 || lh < 0 ) rh = lh = -1;
+		var skeleton = UniMateSkeleton.Build( j.Names, j.Parents, j.Pos, j.Rot, rh, lh, rig.Forward, UniMateSkeleton.EngineUpBasis,
+			bodyAxis: a.Facing == RigFacing.BodyAxis && rh >= 0 );
+		return Finish( rig, skeleton, j, family );
+	}
+
+	static UniMateRig Finish( MotionRig rig, UniMateSkeleton skeleton, JointList j, RigFamily family )
+	{
+		var bfsBone = skeleton.SourceIndex.Select( i => j.BoneOf[i] ).ToArray();
+		var bfsTip = skeleton.SourceIndex.Select( i => j.TipLocal[i] ).ToArray();
+		return new UniMateRig( rig, skeleton, bfsBone, bfsTip, family );
+	}
+
+	/// <summary>The nearest selected descendants of <paramref name="bone"/> (skipping unselected bones in between).</summary>
+	static IEnumerable<int> Below( Skeleton s, HashSet<int> selected, int bone )
+	{
+		for ( var i = 0; i < s.Count; i++ )
+		{
+			if ( i == bone || !selected.Contains( i ) ) continue;
+			var p = s[i].ParentIndex;
+			while ( p >= 0 && !selected.Contains( p ) ) p = s[p].ParentIndex;
+			if ( p == bone ) yield return i;
+		}
+	}
+
+	/// <summary>The joints being assembled: bones first (parents = nearest listed ancestor), then virtual tips.</summary>
+	sealed class JointList
+	{
+		readonly MotionRig _rig;
+		readonly List<int> _bones;
+		public readonly List<string> Names;
+		public readonly List<int> Parents;
+		public readonly List<Vector3> Pos;
+		public readonly List<Quaternion> Rot;
+		public readonly List<int> BoneOf;
+		public readonly List<Vector3> TipLocal;
+
+		public JointList( MotionRig rig, List<int> bones )
+		{
+			_rig = rig;
+			_bones = bones;
+			var s = rig.Skeleton;
+			var rest = s.RestWorld;
+			Names = bones.Select( b => rig.Analysis.Label[b] ).ToList();
+			Parents = bones.Select( b =>
 			{
-				var i = bones.IndexOf( p );
-				if ( i >= 0 ) return i;
-			}
-			return -1;
-		} ).ToList();
-		var hips = bones.IndexOf( rig.HipsIndex );
-		for ( var i = 0; i < parents.Count; i++ ) if ( parents[i] < 0 && i != hips ) parents[i] = hips; // stray roots hang off the hips
-		parents[hips] = -1;
+				for ( var p = s[b].ParentIndex; p >= 0; p = s[p].ParentIndex )
+				{
+					var i = bones.IndexOf( p );
+					if ( i >= 0 ) return i;
+				}
+				return -1;
+			} ).ToList();
+			for ( var i = 1; i < Parents.Count; i++ ) if ( Parents[i] < 0 ) Parents[i] = 0; // stray roots hang off the hips
+			Parents[0] = -1;
+			Pos = bones.Select( b => rest[b].Pos ).ToList();
+			Rot = bones.Select( b => rest[b].Rot ).ToList();
+			BoneOf = new List<int>( bones );
+			TipLocal = new List<Vector3>( bones.Select( _ => Vector3.Zero ) );
+		}
 
-		var pos = bones.Select( b => rest[b].Pos ).ToList();
-		var rot = bones.Select( b => rest[b].Rot ).ToList();
-		var boneOf = new List<int>( bones );
-		var tipLocal = new List<Vector3>( bones.Select( _ => Vector3.Zero ) );
-
-		// virtual tips at the leaf bones' ends
-		void Tip( BoneRole leaf, BoneRole? towards, string name, float lengthScale )
+		/// <summary>A virtual tip joint at the end of leaf bone <paramref name="b"/>: its farthest body descendant, or the bone extended.</summary>
+		public void AddTip( int b, string name, float lengthScale )
 		{
-			if ( rig.Bone( leaf ) is not int b ) return;
-			var j = bones.IndexOf( b );
+			var j = _bones.IndexOf( b );
 			if ( j < 0 ) return;
+			var s = _rig.Skeleton;
+			var rest = s.RestWorld;
 			var p = rest[b].Pos;
 			Vector3 end;
-			var child = FarthestDescendant( rig, b );
-			if ( child is int c && (rest[c].Pos - p).Length() > rig.Cm( 3f ) ) end = rest[c].Pos;
+			var child = _rig.Analysis.FarthestBodyDescendant( b );
+			if ( child >= 0 && (rest[child].Pos - p).Length() > _rig.Cm( 3f ) ) end = rest[child].Pos;
 			else
 			{
 				var parent = s[b].ParentIndex;
-				var dir = parent >= 0 ? rest[b].Pos - rest[parent].Pos : rig.Up;
-				if ( dir.LengthSquared() < 1e-8f ) dir = rig.Up;
-				end = p + Vector3.Normalize( dir ) * MathF.Max( dir.Length() * lengthScale, rig.Cm( 6f ) );
+				var dir = parent >= 0 ? rest[b].Pos - rest[parent].Pos : _rig.Up;
+				if ( dir.LengthSquared() < 1e-8f ) dir = _rig.Up;
+				end = p + Vector3.Normalize( dir ) * MathF.Max( dir.Length() * lengthScale, _rig.Cm( 6f ) );
 			}
-			pos.Add( end ); rot.Add( rest[b].Rot ); names.Add( name ); parents.Add( j ); boneOf.Add( -1 );
-			tipLocal.Add( Vector3.Transform( end - p, Quaternion.Conjugate( rest[b].Rot ) ) );
+			Pos.Add( end ); Rot.Add( rest[b].Rot ); Names.Add( name ); Parents.Add( j ); BoneOf.Add( -1 );
+			TipLocal.Add( Vector3.Transform( end - p, Quaternion.Conjugate( rest[b].Rot ) ) );
 		}
-		Tip( BoneRole.Head, null, "Head End", 0.9f );
-		Tip( BoneRole.HandL, null, "Left Hand End", 0.6f );
-		Tip( BoneRole.HandR, null, "Right Hand End", 0.6f );
-		var leftToe = rig.Bone( BoneRole.ToeL ) is not null;
-		Tip( leftToe ? BoneRole.ToeL : BoneRole.FootL, null, leftToe ? "Left Toe End" : "Left Toe", 0.6f );
-		var rightToe = rig.Bone( BoneRole.ToeR ) is not null;
-		Tip( rightToe ? BoneRole.ToeR : BoneRole.FootR, null, rightToe ? "Right Toe End" : "Right Toe", 0.6f );
-
-		var rh = bones.IndexOf( rig.Bone( BoneRole.UpperLegR ) ?? -1 );
-		var lh = bones.IndexOf( rig.Bone( BoneRole.UpperLegL ) ?? -1 );
-		var skeleton = UniMateSkeleton.Build( names, parents, pos, rot, rh, lh, rig.Forward, UniMateSkeleton.EngineUpBasis );
-		var bfsBone = skeleton.SourceIndex.Select( i => boneOf[i] ).ToArray();
-		var bfsTip = skeleton.SourceIndex.Select( i => tipLocal[i] ).ToArray();
-		return new UniMateRig( rig, skeleton, bfsBone, bfsTip );
-	}
-
-	static int? FarthestDescendant( MotionRig rig, int bone )
-	{
-		int? best = null; var bestDist = 0f;
-		foreach ( var d in rig.Descendants( bone ) )
-		{
-			if ( d == bone || !rig.IsMotionBone( d ) ) continue;
-			var dist = (rig.Skeleton.RestWorld[d].Pos - rig.Skeleton.RestWorld[bone].Pos).Length();
-			if ( dist > bestDist ) { bestDist = dist; best = d; }
-		}
-		return best;
 	}
 
 	/// <summary>World transforms of the UniMate joints for every frame (BFS order), from workspace frames.</summary>
@@ -160,16 +270,17 @@ public sealed class UniMateRig
 	}
 
 	/// <summary>
-	/// Writes a source-space motion (UniMate joints, BFS order) into workspace frames: animated bones get their
-	/// world rotation, the hips their world position; other bones keep the locals of <paramref name="baseFrames"/>
-	/// (or the rest pose).
+	/// Writes a source-space motion (UniMate joints, BFS order) into workspace frames: every engine bone gets a valid
+	/// local transform. Animated bones get their world rotation, the root joint (hips) its world position; bones
+	/// UniMate doesn't animate (fingers left out, helpers, IK targets, bones above the hips) keep the locals of
+	/// <paramref name="baseFrames"/> (or the rest pose) under their new parents.
 	/// </summary>
 	public List<XForm[]> ToFrames( SourceMotion motion, IReadOnlyList<XForm[]> baseFrames = null )
 	{
 		var s = Motion.Skeleton;
 		var T = motion.RootPos.Length;
 		var desiredWorld = new Quaternion?[s.Count];
-		var hipsJoint = Array.IndexOf( Bone, Motion.HipsIndex );
+		var rootBone = RootBone;
 		var result = new List<XForm[]>( T );
 		var world = new XForm[s.Count];
 		for ( var t = 0; t < T; t++ )
@@ -186,7 +297,7 @@ public sealed class UniMateRig
 				if ( desiredWorld[b] is { } g )
 				{
 					var pos = local.Pos;
-					if ( b == Motion.HipsIndex )
+					if ( b == rootBone )
 					{
 						var wantPos = motion.RootPos[t];
 						pos = parent < 0 ? wantPos : Vector3.Transform( wantPos - parentWorld.Pos, Quaternion.Conjugate( parentWorld.Rot ) );
@@ -217,7 +328,7 @@ public sealed class UniMateRig
 			if ( p >= 0 && Bone[p] >= 0 && boneSet.Contains( Bone[p] ) ) set.Add( j );
 		}
 		// the root slot carries the trajectory: keep it when the hips are kept
-		if ( boneSet.Contains( Motion.HipsIndex ) ) set.Add( 0 );
+		if ( boneSet.Contains( RootBone ) ) set.Add( 0 );
 		return set;
 	}
 }

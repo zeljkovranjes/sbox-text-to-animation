@@ -40,14 +40,17 @@ public sealed class UniMateGenerator : IMotionGenerator
 
 	public IReadOnlyList<string> Validate( MotionRig rig ) => UniMateRig.Validate( rig );
 
-	(UniMateRig Rig, PreparedSkeleton Prep) Prepare( MotionRig rig, CancellationToken token )
+	public RigFamily DetectFamily( MotionRig rig ) => UniMateRig.DetectFamily( rig );
+
+	(UniMateRig Rig, PreparedSkeleton Prep) Prepare( MotionRig rig, RigFamily family, CancellationToken token )
 	{
-		var key = AnimationWorkspace.Fingerprint( rig.Skeleton ) + rig.Skeleton.RestWorld.Sum( x => x.Pos.X + x.Pos.Y * 3 + x.Pos.Z * 7 ).ToString( "R" );
+		if ( family == RigFamily.Auto ) family = UniMateRig.DetectFamily( rig );
+		var key = AnimationWorkspace.Fingerprint( rig.Skeleton ) + rig.Skeleton.RestWorld.Sum( x => x.Pos.X + x.Pos.Y * 3 + x.Pos.Z * 7 ).ToString( "R" ) + "|" + family;
 		lock ( _lock )
 		{
 			if ( _rigs.TryGetValue( key, out var cached ) ) return cached;
-			var uniRig = UniMateRig.Build( rig );
-			var prep = _model.Prepare( uniRig.Skeleton, UniMateStats.Mixamo, token );
+			var uniRig = UniMateRig.Build( rig, family );
+			var prep = _model.Prepare( uniRig.Skeleton, UniMateStats.For( uniRig.Family ), token );
 			return _rigs[key] = (uniRig, prep);
 		}
 	}
@@ -59,7 +62,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 	IReadOnlyList<GeneratedMotion> Generate( MotionRig rig, GenerationRequest request, Action<GenerationProgress> progress, CancellationToken token )
 	{
 		progress?.Invoke( new GenerationProgress( "Preparing the skeleton", 0f ) );
-		var (uniRig, prep) = Prepare( rig, token );
+		var (uniRig, prep) = Prepare( rig, request.RigFamily, token );
 		var takes = Math.Max( 1, request.Count );
 		var steps = request.Steps > 0 ? request.Steps : 24;
 		var guidance = request.Guidance > 0 ? request.Guidance : 3f;
@@ -196,7 +199,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 				var (pos, rot) = uniRig.JointWorld( span );
 				var (feat, align) = UniMateFeatures.Encode( pos, rot, uniRig.Skeleton );
 				alignment = align;
-				known = UniMateFeatures.ToModel( feat, UniMateStats.Mixamo, Window );
+				known = UniMateFeatures.ToModel( feat, UniMateStats.For( uniRig.Family ), Window );
 			}
 			var settings = new SampleSettings
 			{
@@ -206,7 +209,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 			var x = _model.Sample( prep, embedding, noise, settings,
 				f => report( windows.Count > 1 ? $"Generating part {windowIndex + 1} of {windows.Count}" : "Generating", (windowIndex + f) / windows.Count ), token );
 
-			var motion = UniMateFeatures.Decode( UniMateFeatures.FromModel( x, J, Window, UniMateStats.Mixamo ), uniRig.Skeleton.Parents );
+			var motion = UniMateFeatures.Decode( UniMateFeatures.FromModel( x, J, Window, UniMateStats.For( uniRig.Family ) ), uniRig.Skeleton.Parents );
 			if ( alignment is not null ) UniMateFeatures.Unalign( motion, alignment );
 			var src = UniMateFeatures.ToSource( motion, uniRig.Skeleton );
 			// bones UniMate doesn't animate (fingers, helpers) keep the source pose
