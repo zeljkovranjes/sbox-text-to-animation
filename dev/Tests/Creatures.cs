@@ -60,6 +60,24 @@ public static class Creatures
         return s;
     }
 
+    /// <summary>
+    /// Eight legs sprawled out sideways from a low body, tips on the ground: the rest pose stands far lower than
+    /// the legs reach.
+    /// </summary>
+    public static List<Spec> Spider()
+    {
+        var s = new List<Spec> { new("root", null, V(0, 0, 0)), new("thorax", "root", V(0, 0, 6)) };
+        s.AddRange(Chain("thorax", ("head", V(12, 0, 7)), ("fang", V(16, 0, 4))));
+        s.AddRange(Chain("thorax", ("abdomen", V(-14, 0, 8))));
+        for (var i = 0; i < 4; i++)
+        {
+            var x = 6f - 4f * i;
+            s.AddRange(Mirrored($"leg{i}", "thorax", ($"leg{i}_coxa_{{s}}", V(x, 4, 6)), ($"leg{i}_femur_{{s}}", V(x, 14, 5)),
+                ($"leg{i}_tibia_{{s}}", V(x, 24, 3.5f)), ($"leg{i}_tarsus_{{s}}", V(x, 34, 2)), ($"leg{i}_tip_{{s}}", V(x, 38, 0))));
+        }
+        return s;
+    }
+
     public static List<Spec> Dog()
     {
         var s = new List<Spec> { new("root", null, V(-30, 0, 0)), new("pelvis", "root", V(-30, 0, 50)) };

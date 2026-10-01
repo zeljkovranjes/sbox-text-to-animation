@@ -42,6 +42,15 @@ for _n in ("save_skeleton_motion", "save_skeleton_motion_ground", "save_skeleton
 sys.modules["data_process.utils.plotting"] = _plot
 
 import bpy  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fbx_ascii_import import import_fbx_ascii, is_ascii_fbx  # noqa: E402
+
+
+def importer_for(path):
+    """upstream's importers; ASCII FBX (which Blender refuses) through fbx_ascii_import"""
+    if path.lower().endswith((".glb", ".gltf")):
+        return be.import_gltf
+    return import_fbx_ascii if is_ascii_fbx(path) else be.import_fbx
 import numpy as np  # noqa: E402
 from data_process.utils import blender_export as be  # noqa: E402
 from data_process.joint_annotation.names_clean_rule import clean_joint_name, post_process  # noqa: E402
@@ -62,7 +71,7 @@ def q_wxyz(m):
 for fbx in fbx_paths:
     tag = os.path.splitext(os.path.basename(fbx))[0].lower()
     try:
-        armature, mesh = be.load_scene(be.import_gltf if fbx.lower().endswith((".glb", ".gltf")) else be.import_fbx, fbx)
+        armature, mesh = be.load_scene(importer_for(fbx), fbx)
     except (RuntimeError, AssertionError) as e:  # ASCII FBX (Blender refuses it), no armature
         print(f"SKIP {tag}: {str(e).splitlines()[0]}")
         continue

@@ -130,7 +130,10 @@ public static class ClipQuality
         var restHeight = Vector3.Dot(rig.Skeleton.RestWorld[rig.HipsIndex].Pos, rig.Up) - restAnkle;
         heights.Sort();
         var maxHeight = heights[^1];
-        if (restHeight > 0f && maxHeight > restHeight * 2.5f)
+        // a pose can put the hips at most a leg's length above a foot: a creature whose rest pose sprawls its legs
+        // (an insect, a spider) stands far taller than its rest hip height without anything being out of scale
+        var reach = MathF.Max(LegReach(rig, rig.LeftFoot!.Ankle), LegReach(rig, rig.RightFoot!.Ankle));
+        if (restHeight > 0f && maxHeight > MathF.Max(restHeight * 2.5f, reach * 1.2f))
             issues.Add(new(IssueSeverity.Error, "scale", $"The hips rise to {maxHeight / restHeight:0.0}× the model's hip height - the animation looks too large for this model."));
         if (upDots.Count > 0)
         {
@@ -140,6 +143,18 @@ public static class ClipQuality
             else if (mean < 0.3f && upDots.Count(d => d < 0.3f) > upDots.Count * 0.9f)
                 issues.Add(new(IssueSeverity.Warning, "axes", "The character lies on its side for the whole clip. If that isn't intended the axes are wrong."));
         }
+    }
+
+    /// <summary>Rest length of the bone chain from the hips down to <paramref name="ankle"/>; 0 when the ankle isn't below the hips.</summary>
+    static float LegReach(MotionRig rig, int ankle)
+    {
+        var length = 0f;
+        for (var b = ankle; b >= 0; b = rig.Skeleton[b].ParentIndex)
+        {
+            if (b == rig.HipsIndex) return length;
+            length += rig.Skeleton[b].RestLocal.Pos.Length();
+        }
+        return 0f;
     }
 
     static void CheckFeet(List<XForm[]> frames, MotionRig rig, float fps, List<ClipIssue> issues)

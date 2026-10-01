@@ -31,6 +31,15 @@ for _n in ("save_skeleton_motion", "save_skeleton_motion_ground", "save_skeleton
 sys.modules["data_process.utils.plotting"] = _plot
 
 import bpy  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fbx_ascii_import import import_fbx_ascii, is_ascii_fbx  # noqa: E402
+
+
+def importer_for(path):
+    """upstream's importers; ASCII FBX (which Blender refuses) through fbx_ascii_import"""
+    if path.lower().endswith((".glb", ".gltf")):
+        return be.import_gltf
+    return import_fbx_ascii if is_ascii_fbx(path) else be.import_fbx
 import json  # noqa: E402
 import numpy as np  # noqa: E402
 from data_process.utils import blender_export as be  # noqa: E402
@@ -44,7 +53,7 @@ for spec in args[1:]:
     prep = json.load(open(os.path.join(fix, f"prep_{tag}.json")))
     names = [prep["raw"][i]["name"] for i in z["src_bone"]]        # BFS joint -> bone name
     # load the character the way prep fixtures did (upstream load_scene picks the main armature)
-    armature, _ = be.load_scene(be.import_gltf if path.lower().endswith((".glb", ".gltf")) else be.import_fbx, path)
+    armature, _ = be.load_scene(importer_for(path), path)
     anim_local, rest_local = z["anim_local_mat"], z["rest_local_mat"]
     sync_armature_bones(armature, names, extra_bones_strategy="merge")
     set_scene_timing(anim_local.shape[0], 30)

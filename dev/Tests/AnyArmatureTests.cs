@@ -289,4 +289,40 @@ public class AnyArmatureTests
             Assert.True(Vector3.Distance(frames[^1][b].Pos, rig.Skeleton[b].RestLocal.Pos) < 1e-3f, $"{rig.Skeleton[b].Name}: {frames[^1][b].Pos} vs rest {rig.Skeleton[b].RestLocal.Pos} (root {rig.Skeleton[rig.RootIndex].Name}, body root {rig.Skeleton[rig.Analysis.BodyRoot].Name})");
         }
     }
+
+    /// <summary>
+    /// The quality check's "too large" bound is the legs' reach, not the rest hip height: a sprawled creature
+    /// standing on straightened legs is fine, an animation for a bigger skeleton (every offset tripled) is not.
+    /// </summary>
+    [Fact]
+    public void SprawledLegsStandingTallAreNotOutOfScale()
+    {
+        var rig = MotionRig.Create(Creatures.Build(Creatures.Spider()));
+        var s = rig.Skeleton;
+        Assert.True(rig.LeftFoot is not null && rig.RightFoot is not null, "the spider's legs are found as legs");
+        var standing = new XForm[s.Count];
+        for (var b = 0; b < s.Count; b++)
+        {
+            standing[b] = s[b].RestLocal;
+            if (!s[b].Name.Contains("_coxa_")) continue;
+            // swing the whole (straight, sideways) leg down under the body
+            var side = s[b].Name.EndsWith("_L") ? -1f : 1f;
+            var parentWorld = s.RestWorld[s[b].ParentIndex].Rot;
+            var world = Quaternion.CreateFromAxisAngle(Vector3.UnitX, side * MathF.PI / 2f) * s.RestWorld[b].Rot;
+            standing[b] = new XForm(s[b].RestLocal.Pos, Quaternion.Normalize(Quaternion.Inverse(parentWorld) * world));
+        }
+        var tall = new AnimClip { Name = "stand", Fps = 30f, Frames = Enumerable.Repeat(standing, 12).ToList() };
+        var tallIssues = ClipQuality.Analyze(tall, rig);
+        foreach (var i in tallIssues) _out.WriteLine($"standing: {i.Severity} {i.Code}: {i.Message}");
+        var world0 = new XForm[s.Count];
+        FkUtil.ToWorld(standing, s, world0);
+        var restHips = Vector3.Dot(s.RestWorld[rig.HipsIndex].Pos, rig.Up) - Vector3.Dot(s.RestWorld[rig.LeftFoot!.Ankle].Pos, rig.Up);
+        var hips = Vector3.Dot(world0[rig.HipsIndex].Pos, rig.Up) - Vector3.Dot(world0[rig.LeftFoot!.Ankle].Pos, rig.Up);
+        Assert.True(hips > restHips * 2.5f, $"the stance is taller than the old bound ({hips} vs rest {restHips})");
+        Assert.DoesNotContain(tallIssues, i => i.Code == "scale");
+
+        var big = standing.Select(x => new XForm(x.Pos * 3f, x.Rot)).ToArray();
+        var bigIssues = ClipQuality.Analyze(new AnimClip { Name = "big", Fps = 30f, Frames = Enumerable.Repeat(big, 12).ToList() }, rig);
+        Assert.Contains(bigIssues, i => i.Code == "scale" && i.Severity == IssueSeverity.Error);
+    }
 }

@@ -104,9 +104,12 @@ stats_all = np.load(os.path.join(CACHE, EXP, "dataset_stats.npy"), allow_pickle=
 MJ, MD, T = cfg.dataset.max_joints, cfg.dataset.max_depth, cfg.dataset.max_motion_length
 te = TextEncoder()
 
+ONLY = [r for r in os.environ.get("T2A_RIGS", "").split(",") if r]  # restrict to these rigs (others keep their files)
 for path in sorted(glob.glob(os.path.join(FIX, "prep_*.json"))):
     fx = json.load(open(path))
     rig = fx["rig"]
+    if ONLY and rig not in ONLY:
+        continue
     if "degenerate" in fx:
         continue
     raw = fx["raw"]
