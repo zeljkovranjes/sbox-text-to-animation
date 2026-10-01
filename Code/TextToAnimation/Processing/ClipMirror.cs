@@ -73,11 +73,20 @@ public static class ClipMirror
     {
         ArgumentNullException.ThrowIfNull(frames);
         ArgumentNullException.ThrowIfNull(rig);
+        return Mirror(frames, rig.Skeleton, LateralAxis(rig), BuildPairing(rig));
+    }
 
-        var skeleton = rig.Skeleton;
-        var lateral = LateralAxis(rig);
-        var pair = BuildPairing(rig);
-        var fkFix = HierarchyInconsistentBones(rig, pair);
+    /// <summary>
+    /// Mirrors across the plane through the rig-space origin with unit normal <paramref name="lateral"/>, swapping
+    /// each bone with <paramref name="pair"/>[bone] (itself for centre bones). Used directly for rigs whose
+    /// left/right partners come from their shape (<see cref="RigAnalysis"/>) instead of bone names.
+    /// </summary>
+    public static List<XForm[]> Mirror(List<XForm[]> frames, Skeleton skeleton, Vector3 lateral, int[] pair)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        ArgumentNullException.ThrowIfNull(skeleton);
+        if (pair.Length != skeleton.Count) throw new ArgumentException("The pairing doesn't match the skeleton.", nameof(pair));
+        var fkFix = HierarchyInconsistentBones(skeleton, pair);
 
         var result = new List<XForm[]>(frames.Count);
         var baseWorld = fkFix.Count > 0 ? new XForm[skeleton.Count] : null;
@@ -142,9 +151,10 @@ public static class ClipMirror
     /// need the FK solve in <see cref="Mirror"/> and their DMX channels must be written
     /// (<see cref="MirrorSafeExclusions"/>).
     /// </summary>
-    private static HashSet<int> HierarchyInconsistentBones(TargetRig rig, int[] pair)
+    private static HashSet<int> HierarchyInconsistentBones(TargetRig rig, int[] pair) => HierarchyInconsistentBones(rig.Skeleton, pair);
+
+    private static HashSet<int> HierarchyInconsistentBones(Skeleton skeleton, int[] pair)
     {
-        var skeleton = rig.Skeleton;
         var result = new HashSet<int>();
         for (var i = 0; i < pair.Length; i++)
         {

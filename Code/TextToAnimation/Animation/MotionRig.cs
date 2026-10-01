@@ -82,7 +82,7 @@ public sealed class MotionRig
         Problems = problems;
         Analysis = RigAnalysis.Analyze(skeleton);
 
-        if (!IsRoleHumanoid(map))
+        if (!IsRoleHumanoid(map) || !Analysis.IsHumanoid)
         {
             // any other armature (a creature, or a humanoid whose bone names aren't recognised): the shape decides
             var a = Analysis;
@@ -219,7 +219,26 @@ public sealed class MotionRig
     /// </summary>
     public bool IsMotionBone(int bone) => _motionBones[bone];
 
-    public int? Bone(BoneRole role) => Map.RoleToBone.TryGetValue(role, out var b) ? b : null;
+    /// <summary>
+    /// The bone with a humanoid role. For rigs read from their shape, roles come from the shape's labels (and only
+    /// for humanoids): bone names that look like roles aren't trusted on a creature.
+    /// </summary>
+    public int? Bone(BoneRole role)
+    {
+        if (HasNamedRoles) return Map.RoleToBone.TryGetValue(role, out var b) ? b : null;
+        if (!Analysis.IsHumanoid || !ShapeRoleLabels.TryGetValue(role, out var label)) return null;
+        var bone = Array.IndexOf(Analysis.Label, label);
+        return bone >= 0 && Analysis.InBody[bone] ? bone : null;
+    }
+
+    static readonly Dictionary<BoneRole, string> ShapeRoleLabels = new()
+    {
+        [BoneRole.Hips] = "Hips", [BoneRole.Neck] = "Neck", [BoneRole.Head] = "Head",
+        [BoneRole.ClavicleL] = "Left Shoulder", [BoneRole.UpperArmL] = "Left Upper Arm", [BoneRole.LowerArmL] = "Left Forearm", [BoneRole.HandL] = "Left Hand",
+        [BoneRole.ClavicleR] = "Right Shoulder", [BoneRole.UpperArmR] = "Right Upper Arm", [BoneRole.LowerArmR] = "Right Forearm", [BoneRole.HandR] = "Right Hand",
+        [BoneRole.UpperLegL] = "Left Thigh", [BoneRole.LowerLegL] = "Left Shin", [BoneRole.FootL] = "Left Foot", [BoneRole.ToeL] = "Left Toe",
+        [BoneRole.UpperLegR] = "Right Thigh", [BoneRole.LowerLegR] = "Right Shin", [BoneRole.FootR] = "Right Foot", [BoneRole.ToeR] = "Right Toe",
+    };
 
     /// <summary>All bones in the subtree under <paramref name="bone"/>, including it.</summary>
     public IEnumerable<int> Descendants(int bone)

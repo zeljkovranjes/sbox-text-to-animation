@@ -149,6 +149,7 @@ public sealed class RigAnalysis
         a.FindLimbs();
         a.LabelBones();
         a.ChooseFacing();
+        a.PairEverything();
         return a;
     }
 
@@ -352,9 +353,16 @@ public sealed class RigAnalysis
     {
         if (!Symmetric) return;
         var bones = BodyBones();
+        Pair(bones, Mirror);
+        if (!bones.Any(b => Mirror[b] != b)) Symmetric = false;
+    }
+
+    /// <summary>Pairs the off-plane <paramref name="bones"/> with their reflections, nearest first, into <paramref name="table"/>.</summary>
+    void Pair(List<int> bones, int[] table)
+    {
         var tc = 0.01f * Size;
-        var pos = bones.Where(b => Lateral(b) > tc).ToList();
-        var neg = bones.Where(b => Lateral(b) < -tc).ToList();
+        var pos = bones.Where(b => table[b] == b && Lateral(b) > tc).ToList();
+        var neg = bones.Where(b => table[b] == b && Lateral(b) < -tc).ToList();
         var candidates = new List<(float Cost, int A, int B)>();
         foreach (var a in pos)
         {
@@ -367,10 +375,22 @@ public sealed class RigAnalysis
         }
         foreach (var (_, a, b) in candidates.OrderBy(c => c.Cost).ThenBy(c => c.A).ThenBy(c => c.B))
         {
-            if (Mirror[a] != a || Mirror[b] != b) continue;
-            Mirror[a] = b; Mirror[b] = a;
+            if (table[a] != a || table[b] != b) continue;
+            table[a] = b; table[b] = a;
         }
-        if (!bones.Any(b => Mirror[b] != b)) Symmetric = false;
+    }
+
+    /// <summary>
+    /// Mirror partners for every bone (helpers, IK targets and twist bones too), for mirroring whole clips: the
+    /// body's partners plus the remaining bones paired by their reflected rest positions.
+    /// </summary>
+    public int[] MirrorAll { get; private set; } = Array.Empty<int>();
+
+    void PairEverything()
+    {
+        MirrorAll = Mirror.ToArray();
+        if (!Symmetric) return;
+        Pair(Enumerable.Range(0, Skeleton.Count).ToList(), MirrorAll);
     }
 
     // ------------------------------------------------------------------ forward
