@@ -284,7 +284,7 @@ public class AnyArmatureTests
         for (var b = 0; b < rig.Skeleton.Count; b++)
         {
             if (b == rig.Analysis.BodyRoot || rig.Skeleton[b].ParentIndex < 0) continue;
-            Assert.True(Vector3.Distance(frames[^1][b].Pos, rig.Skeleton[b].RestLocal.Pos) < 1e-3f, rig.Skeleton[b].Name);
+            Assert.True(Vector3.Distance(frames[^1][b].Pos, rig.Skeleton[b].RestLocal.Pos) < 1e-3f, $"{rig.Skeleton[b].Name}: {frames[^1][b].Pos} vs rest {rig.Skeleton[b].RestLocal.Pos} (root {rig.Skeleton[rig.RootIndex].Name}, body root {rig.Skeleton[rig.Analysis.BodyRoot].Name})");
         }
     }
 }
