@@ -109,6 +109,12 @@ public static class OnnxOps
 		["LayerNormalization"] = ( n, i, c ) => new[] { LayerNorm( i[0], i[1], i.Length > 2 ? i[2] : null, (int)n.GetInt( "axis", -1 ), n.GetFloat( "epsilon", 1e-5f ), c ) },
 		["SimplifiedLayerNormalization"] = ( n, i, c ) => new[] { RmsNorm( i[0], i[1], (int)n.GetInt( "axis", -1 ), n.GetFloat( "epsilon", 1e-6f ), c ) },
 		["MatMul"] = ( n, i, c ) => new[] { MatMul( i[0], i[1], c ) },
+		// runtime fusions (see OnnxSession.Fuse)
+		["MatMulBias"] = ( n, i, c ) => new[] { MatMulBias( i[0], i[1], i[2], c ) },
+		["SiLU"] = ( n, i, c ) => new[] { FastKernels.SiLU( i[0], c ) },
+		["Rope"] = ( n, i, c ) => new[] { FastKernels.Rope( i[0], i[1], i[2], i[3], c ) },
+		["MulAdd"] = ( n, i, c ) => new[] { FastKernels.MulAdd( i[0], i[1], i[2], c )
+			?? FastBinary( FastBinary( i[0], i[1], BinOp.Mul, FastKernels.Op.Mul, c ), i[2], BinOp.Add, FastKernels.Op.Add, c ) },
 		["Gemm"] = ( n, i, c ) => new[] { Gemm( n, i, c ) },
 	};
 
@@ -890,8 +896,15 @@ public static class OnnxOps
 	// ======================================================================== matrix multiply
 
 
+	static Tensor MatMulBias( Tensor a, Tensor b, Tensor bias, ExecContext ctx )
+	{
+		if ( a.Rank < 2 || (long)b.Shape[0] * b.Shape[1] <= 64 * 64 )
+			return FastBinary( MatMul( a, b, ctx ), bias, BinOp.Add, FastKernels.Op.Add, ctx );
+		return MatMulPacked( a, b, ctx, bias.F );
+	}
+
 	/// <summary>A[..., K] x B[K, N] with B packed for the register-blocked GEMM (cached when B is a constant).</summary>
-	static Tensor MatMulPacked( Tensor a, Tensor b, ExecContext ctx )
+	static Tensor MatMulPacked( Tensor a, Tensor b, ExecContext ctx, float[] bias = null )
 	{
 		int K = b.Shape[0], N = b.Shape[1];
 		var M = a.Length / Math.Max( 1, K );
@@ -903,14 +916,14 @@ public static class OnnxOps
 		}
 		else packed = FastKernels.Pack( b.F, K, N );
 		var c = new float[M * N];
-		FastKernels.Gemm( a.F, 0, M, packed, c, 0, ctx );
+		FastKernels.Gemm( a.F, 0, M, packed, c, 0, ctx, bias );
 		return Tensor.Float( a.Shape.Take( a.Rank - 1 ).Append( N ).ToArray(), c );
 	}
 
 	/// <summary>NumPy matmul with batch broadcasting.</summary>
 	public static Tensor MatMul( Tensor a, Tensor b, ExecContext ctx )
 	{
-		if ( b.Rank == 2 && a.Rank >= 2 && a.Shape[^1] == b.Shape[0] && a.IsFloat && b.IsFloat ) return MatMulPacked( a, b, ctx );
+		if ( b.Rank == 2 && a.Rank >= 2 && a.Shape[^1] == b.Shape[0] && a.IsFloat && b.IsFloat && (long)b.Shape[0] * b.Shape[1] > 64 * 64 ) return MatMulPacked( a, b, ctx );
 		var aShape = a.Rank == 1 ? new[] { 1, a.Shape[0] } : a.Shape;
 		var bShape = b.Rank == 1 ? new[] { b.Shape[0], 1 } : b.Shape;
 		int M = aShape[^2], K = aShape[^1], N = bShape[^1];

@@ -39,8 +39,14 @@ public class UniMateCoreTests
         var n = parents.Length;
         var p = Enumerable.Range(0, n).Select(i => new Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2])).ToArray();
         var r = Enumerable.Range(0, n).Select(i => Wxyz(rot, i * 4)).ToArray();
-        // caller order = mixamo order; RightUpLeg = 18, LeftUpLeg = 14
-        var names = Enumerable.Range(0, n).Select(i => $"j{i}").ToArray();
+        // caller order = mixamo order; RightUpLeg = 18, LeftUpLeg = 14. Clean names come in BFS order: build
+        // once to learn the order, then map them back to caller order.
+        var placeholder = Enumerable.Range(0, n).Select(i => $"j{i}").ToArray();
+        var probe = UniMateSkeleton.Build(placeholder, parents, p, r, 18, 14, Vector3.UnitX, UniMateSkeleton.EngineUpBasis);
+        var bfsNames = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Fixtures.Path("unimate/strings.json"))).RootElement
+            .GetProperty("v2_cond.npz:clean_names").EnumerateArray().Select(e => e.GetString()).ToArray();
+        var names = new string[n];
+        for (var j = 0; j < n; j++) names[probe.SourceIndex[j]] = bfsNames[j];
         return UniMateSkeleton.Build(names, parents, p, r, 18, 14, Vector3.UnitX, UniMateSkeleton.EngineUpBasis);
     }
 

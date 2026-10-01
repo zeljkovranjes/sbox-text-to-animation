@@ -40,7 +40,7 @@ public sealed class OnnxSession
 			_ctx.Constants.Add( _constants[init.Name] );
 			init.Raw = null; // keep only the decoded copy
 		}
-		_order = TopologicalOrder( model.Graph );
+		_order = Fuse( TopologicalOrder( model.Graph ) );
 		for ( var i = 0; i < _order.Count; i++ )
 			foreach ( var input in _order[i].Inputs ) if ( input.Length > 0 ) _lastUse[input] = i;
 		InputNames = model.Graph.Inputs.Select( v => v.Name ).Where( n => !_constants.ContainsKey( n ) ).ToList();
@@ -95,6 +95,83 @@ public sealed class OnnxSession
 		}
 		progress?.Invoke( 1f );
 		return OutputNames.ToDictionary( n => n, n => values.TryGetValue( n, out var t ) ? t : throw new InvalidOperationException( $"Output \"{n}\" was not produced." ) );
+	}
+
+	/// <summary>
+	/// Runtime-only fusions (the ONNX file is unchanged): MatMul by a constant matrix followed by Add of a
+	/// constant bias becomes one GEMM with a bias epilogue; Sigmoid(x)*x becomes SiLU.
+	/// </summary>
+	List<OnnxNode> Fuse( List<OnnxNode> order )
+	{
+		var consumers = new Dictionary<string, List<OnnxNode>>( StringComparer.Ordinal );
+		foreach ( var n in order )
+			foreach ( var i in n.Inputs )
+			{
+				if ( i.Length == 0 ) continue;
+				if ( !consumers.TryGetValue( i, out var list ) ) consumers[i] = list = new List<OnnxNode>();
+				list.Add( n );
+			}
+		var outputs = new HashSet<string>( Model.Graph.Outputs.Select( o => o.Name ), StringComparer.Ordinal );
+		bool SingleUse( string value, out OnnxNode user )
+		{
+			user = null;
+			if ( outputs.Contains( value ) || !consumers.TryGetValue( value, out var list ) || list.Count != 1 ) return false;
+			user = list[0];
+			return true;
+		}
+		var producer = new Dictionary<string, OnnxNode>( StringComparer.Ordinal );
+		foreach ( var n in order ) foreach ( var o in n.Outputs ) producer[o] = n;
+		var removed = new HashSet<OnnxNode>( ReferenceEqualityComparer.Instance );
+		// a fused node is emitted where the LAST node it replaces was, so every input already exists
+		var replaceAt = new Dictionary<OnnxNode, OnnxNode>( ReferenceEqualityComparer.Instance );
+		var result = new List<OnnxNode>( order.Count );
+		foreach ( var n in order )
+		{
+			if ( replaceAt.TryGetValue( n, out var fusedHere ) ) { result.Add( fusedHere ); continue; }
+			if ( removed.Contains( n ) ) continue;
+			// RoPE: Add( Mul(x, cos), Mul(MatMul(x, R), sin) ) with R a signed permutation (rotate_half)
+			if ( n.OpType == "MatMul" && _constants.TryGetValue( n.Inputs[1], out var rmat ) && FastKernels.RotationMap( rmat ) is not null
+				&& SingleUse( n.Outputs[0], out var mulS ) && mulS.OpType == "Mul"
+				&& SingleUse( mulS.Outputs[0], out var addR ) && addR.OpType == "Add" )
+			{
+				var x = n.Inputs[0];
+				var sin = mulS.Inputs[0] == n.Outputs[0] ? mulS.Inputs[1] : mulS.Inputs[0];
+				var otherOut = addR.Inputs[0] == mulS.Outputs[0] ? addR.Inputs[1] : addR.Inputs[0];
+				if ( producer.TryGetValue( otherOut, out var mulC ) && mulC.OpType == "Mul" && SingleUse( otherOut, out _ )
+					&& (mulC.Inputs[0] == x || mulC.Inputs[1] == x) )
+				{
+					var cos = mulC.Inputs[0] == x ? mulC.Inputs[1] : mulC.Inputs[0];
+					removed.Add( mulS ); removed.Add( mulC );
+					replaceAt[addR] = new OnnxNode { Name = n.Name + "+rope", OpType = "Rope", Inputs = new[] { x, cos, sin, n.Inputs[1] }, Outputs = addR.Outputs };
+					continue;
+				}
+			}
+			// a*b + c in one pass (adaLN modulate, gated residuals)
+			if ( n.OpType == "Mul" && SingleUse( n.Outputs[0], out var addM ) && addM.OpType == "Add" && addM.Inputs[0] != addM.Inputs[1] && !replaceAt.ContainsKey( addM ) && !removed.Contains( addM ) )
+			{
+				var c = addM.Inputs[0] == n.Outputs[0] ? addM.Inputs[1] : addM.Inputs[0];
+				replaceAt[addM] = new OnnxNode { Name = n.Name + "+add", OpType = "MulAdd", Inputs = new[] { n.Inputs[0], n.Inputs[1], c }, Outputs = addM.Outputs };
+				continue;
+			}
+			if ( n.OpType == "MatMul" && _constants.TryGetValue( n.Inputs[1], out var w ) && w.Rank == 2
+				&& SingleUse( n.Outputs[0], out var add ) && add.OpType == "Add" )
+			{
+				var other = add.Inputs[0] == n.Outputs[0] ? add.Inputs[1] : add.Inputs[0];
+				if ( _constants.TryGetValue( other, out var bias ) && bias.Length == w.Shape[1] && bias.IsFloat )
+				{
+					replaceAt[add] = new OnnxNode { Name = n.Name + "+bias", OpType = "MatMulBias", Inputs = new[] { n.Inputs[0], n.Inputs[1], other }, Outputs = add.Outputs };
+					continue;
+				}
+			}
+			if ( n.OpType == "Sigmoid" && SingleUse( n.Outputs[0], out var mul ) && mul.OpType == "Mul"
+				&& (mul.Inputs[0] == n.Inputs[0] || mul.Inputs[1] == n.Inputs[0]) )
+			{
+				replaceAt[mul] = new OnnxNode { Name = n.Name + "+silu", OpType = "SiLU", Inputs = new[] { n.Inputs[0] }, Outputs = mul.Outputs };
+				continue;
+			}
+			result.Add( n );
+		}
+		return result;
 	}
 
 	static List<OnnxNode> TopologicalOrder( OnnxGraphProto graph )

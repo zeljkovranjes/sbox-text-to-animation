@@ -28,15 +28,22 @@ public sealed record UniMateArch( int Layers, int Width = 512, int Heads = 8, in
 /// </summary>
 public sealed class UniMateGraphBuilder
 {
+	/// <summary>Bumped whenever the generated graphs or weight layout change (old weight blobs are rebuilt).</summary>
+	public const int FormatVersion = 2;
+
 	readonly IReadOnlyDictionary<string, WeightTensor> _w;
 	readonly UniMateArch _arch;
+	readonly WeightBlob _blob;
 	OnnxGraphBuilder _g;
 	readonly Dictionary<string, string> _weightNames = new( StringComparer.Ordinal );
 
-	public UniMateGraphBuilder( IReadOnlyDictionary<string, WeightTensor> weights, UniMateArch arch )
+	/// <param name="weights">Raw checkpoint weights; may be null when every weight is already in <paramref name="blob"/>.</param>
+	/// <param name="blob">Shared external data file. Null keeps weights in each graph's own data stream.</param>
+	public UniMateGraphBuilder( IReadOnlyDictionary<string, WeightTensor> weights, UniMateArch arch, WeightBlob blob = null )
 	{
-		_w = weights;
+		_w = weights ?? new Dictionary<string, WeightTensor>();
 		_arch = arch;
+		_blob = blob;
 	}
 
 	const int F32 = OnnxGraphBuilder.Float;
@@ -52,20 +59,37 @@ public sealed class UniMateGraphBuilder
 	string Raw( string name, int[] shape, float[] data )
 	{
 		if ( _weightNames.TryGetValue( name, out var existing ) ) return existing;
+		if ( _blob is not null && (_blob.Writable || _blob.TryGet( name, out _ )) )
+		{
+			var e = _blob.GetOrAdd( name, shape, data );
+			var r = _g.ExternalReference( name, F32, shape.Select( s => (long)s ).ToArray(), _blob.FileName, e.Offset, e.Length );
+			_weightNames[name] = r;
+			return r;
+		}
 		var bytes = MemoryMarshal.AsBytes( data.AsSpan() );
 		var n = _g.Weight( name, F32, shape.Select( s => (long)s ).ToArray(), bytes );
 		_weightNames[name] = n;
 		return n;
 	}
 
+	/// <summary>A reference to a weight already in the shared blob (no raw weights needed), or null.</summary>
+	string FromBlob( string key )
+	{
+		if ( _weightNames.TryGetValue( key, out var existing ) ) return existing;
+		if ( _blob is null || !_blob.TryGet( key, out var e ) ) return null;
+		var r = _g.ExternalReference( key, F32, e.Shape.Select( s => (long)s ).ToArray(), _blob.FileName, e.Offset, e.Length );
+		_weightNames[key] = r;
+		return r;
+	}
+
 	/// <summary>A weight as stored ([out, in] for Linear weights).</summary>
-	string Param( string name ) { var t = W( name ); return Raw( name, t.Shape, t.Data ); }
+	string Param( string name ) { if ( FromBlob( name ) is { } r ) return r; var t = W( name ); return Raw( name, t.Shape, t.Data ); }
 
 	/// <summary>A Linear weight transposed to [in, out] for MatMul.</summary>
 	string LinearWeight( string name )
 	{
 		var key = name + ".T";
-		if ( _weightNames.TryGetValue( key, out var existing ) ) return existing;
+		if ( FromBlob( key ) is { } cached ) return cached;
 		var t = W( name );
 		int o = t.Shape[0], i = t.Shape[1];
 		var data = new float[o * i];
@@ -87,6 +111,8 @@ public sealed class UniMateGraphBuilder
 	/// <summary>Linear from a slice of rows of a packed weight (e.g. MultiheadAttention in_proj).</summary>
 	string LinearRows( string x, string weightName, string biasName, int rowStart, int rows, string key )
 	{
+		if ( FromBlob( key + ".w" ) is { } bw && FromBlob( key + ".b" ) is { } bb )
+			return Op( "Add", Op( "MatMul", x, bw ), bb );
 		var w = W( weightName ); var b = W( biasName );
 		var inDim = w.Shape[1];
 		var data = new float[rows * inDim];
@@ -172,7 +198,7 @@ public sealed class UniMateGraphBuilder
 		var q = Op( "Add", queries, attn );
 		var ff = Rms( q, "tpos_pool.pool.norm_ff.weight" );
 		var x12 = Linear( ff, "tpos_pool.pool.ffn.w12" );
-		var poolHidden = W( "tpos_pool.pool.ffn.w12.weight" ).Shape[0] / 2;
+		var poolHidden = 2 * D; // TposCrossAttentionPool: SwiGLU hidden = latent * mlp_ratio(2.0)
 		var halves = Split( x12, -1, poolHidden, poolHidden );
 		var hidden = Op( "Mul", SiLU( halves[0] ), halves[1] );
 		q = Op( "Add", q, Linear( hidden, "tpos_pool.pool.ffn.w3" ) );
@@ -282,30 +308,30 @@ public sealed class UniMateGraphBuilder
 
 			// spatial: per frame over joints, graph biased
 			var us = Modulate( Rms( h, p + ".norm_s.weight" ), 0, 1 );
-			var qkv = Transpose( Reshape( Linear( us, p + ".s_attn.qkv" ), B, Fp, J, 3, H, Hd ), 3, 0, 1, 4, 2, 5 ); // (3,B,F',H,J,hd)
-			var parts = Split( qkv, 0, 1, 1, 1 );
-			var sq = Rope( Rms( Reshape( parts[0], B * Fp, H, J, Hd ), p + ".s_attn.q_norm.weight" ), sCos, sSin );
-			var sk = Rope( Rms( Reshape( parts[1], B * Fp, H, J, Hd ), p + ".s_attn.k_norm.weight" ), sCos, sSin );
-			var sv = Reshape( parts[2], B * Fp, H, J, Hd );
+			// q, k, v as three matmuls (rows of the packed qkv weight): no split copies
+			string SpatialHeads( string lin ) => Reshape( Transpose( Reshape( lin, B, Fp, J, H, Hd ), 0, 1, 3, 2, 4 ), B * Fp, H, J, Hd );
+			var sq = Rope( Rms( SpatialHeads( LinearRows( us, p + ".s_attn.qkv.weight", p + ".s_attn.qkv.bias", 0, D, p + ".s_attn.q" ) ), p + ".s_attn.q_norm.weight" ), sCos, sSin );
+			var sk = Rope( Rms( SpatialHeads( LinearRows( us, p + ".s_attn.qkv.weight", p + ".s_attn.qkv.bias", D, D, p + ".s_attn.k" ) ), p + ".s_attn.k_norm.weight" ), sCos, sSin );
+			var sv = SpatialHeads( LinearRows( us, p + ".s_attn.qkv.weight", p + ".s_attn.qkv.bias", 2 * D, D, p + ".s_attn.v" ) );
 			var so = Attention( sq, sk, sv, $"bias_{i}", 1f / MathF.Sqrt( Hd ) ); // (B*F',H,J,hd)
 			var sOut = Linear( Reshape( Transpose( Reshape( so, B, Fp, H, J, Hd ), 0, 1, 3, 2, 4 ), B, Fp, J, D ), p + ".s_attn.proj" );
 			h = Op( "Add", h, Op( "Mul", chunks[2], sOut ) );
 
 			// temporal: per joint over frames
 			var ut = Transpose( Modulate( Rms( h, p + ".norm_t.weight" ), 3, 4 ), 0, 2, 1, 3 ); // (B,J,F',D)
-			var tqkv = Transpose( Reshape( Linear( ut, p + ".t_attn.qkv" ), B, J, Fp, 3, H, Hd ), 3, 0, 1, 4, 2, 5 ); // (3,B,J,H,F',hd)
-			var tparts = Split( tqkv, 0, 1, 1, 1 );
-			var tq = Rope( Rms( Reshape( tparts[0], B * J, H, Fp, Hd ), p + ".t_attn.q_norm.weight" ), tCos, tSin );
-			var tk = Rope( Rms( Reshape( tparts[1], B * J, H, Fp, Hd ), p + ".t_attn.k_norm.weight" ), tCos, tSin );
-			var tv = Reshape( tparts[2], B * J, H, Fp, Hd );
+			string TemporalHeads( string lin ) => Reshape( Transpose( Reshape( lin, B, J, Fp, H, Hd ), 0, 1, 3, 2, 4 ), B * J, H, Fp, Hd );
+			var tq = Rope( Rms( TemporalHeads( LinearRows( ut, p + ".t_attn.qkv.weight", p + ".t_attn.qkv.bias", 0, D, p + ".t_attn.q" ) ), p + ".t_attn.q_norm.weight" ), tCos, tSin );
+			var tk = Rope( Rms( TemporalHeads( LinearRows( ut, p + ".t_attn.qkv.weight", p + ".t_attn.qkv.bias", D, D, p + ".t_attn.k" ) ), p + ".t_attn.k_norm.weight" ), tCos, tSin );
+			var tv = TemporalHeads( LinearRows( ut, p + ".t_attn.qkv.weight", p + ".t_attn.qkv.bias", 2 * D, D, p + ".t_attn.v" ) );
 			var to = Attention( tq, tk, tv, null, 1f / MathF.Sqrt( Hd ) ); // (B*J,H,F',hd)
 			var tOut = Linear( Reshape( Transpose( Reshape( to, B, J, H, Fp, Hd ), 0, 3, 1, 2, 4 ), B, Fp, J, D ), p + ".t_attn.proj" );
 			h = Op( "Add", h, Op( "Mul", chunks[5], tOut ) );
 
 			// SwiGLU MLP
 			var um = Modulate( Rms( h, p + ".norm_mlp.weight" ), 6, 7 );
-			var x12 = Split( Linear( um, p + ".mlp.w12" ), -1, _arch.FfHidden, _arch.FfHidden );
-			var mOut = Linear( Op( "Mul", SiLU( x12[0] ), x12[1] ), p + ".mlp.w3" );
+			var gateIn = LinearRows( um, p + ".mlp.w12.weight", p + ".mlp.w12.bias", 0, _arch.FfHidden, p + ".mlp.w1" );
+			var valueIn = LinearRows( um, p + ".mlp.w12.weight", p + ".mlp.w12.bias", _arch.FfHidden, _arch.FfHidden, p + ".mlp.w2" );
+			var mOut = Linear( Op( "Mul", SiLU( gateIn ), valueIn ), p + ".mlp.w3" );
 			h = Op( "Add", h, Op( "Mul", chunks[8], mOut ) );
 		}
 

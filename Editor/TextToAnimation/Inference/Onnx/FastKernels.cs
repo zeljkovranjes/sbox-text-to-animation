@@ -17,60 +17,94 @@ namespace TextToAnimation.Editor.Inference.Onnx;
 /// </summary>
 public static unsafe class FastKernels
 {
-	const int MR = 6;
-	const int NR = 16;
+	/// <summary>AVX-512 (32 registers, 16 floats wide) allows a 12x32 register tile; otherwise AVX2 6x16.</summary>
+	public static readonly bool UseAvx512 = Avx512F.IsSupported;
+	static readonly int MR = UseAvx512 ? 12 : 6;
+	static readonly int NR = UseAvx512 ? 32 : 16;
 
-	/// <summary>B[K,N] packed into column panels of 16: panel p holds rows k=0..K-1 of columns 16p..16p+15 (zero padded).</summary>
+	/// <summary>B[K,N] packed into column panels of NR: panel p holds rows k=0..K-1 of columns NR*p.. (zero padded).</summary>
 	public sealed class PackedMatrix
 	{
-		public int K, N, Panels;
+		public int K, N, Panels, Nr;
 		public float[] Data;
 	}
 
 	public static PackedMatrix Pack( float[] b, int K, int N )
 	{
-		var panels = (N + NR - 1) / NR;
-		var data = new float[panels * K * NR];
+		var nr = NR;
+		var panels = (N + nr - 1) / nr;
+		var data = new float[panels * K * nr];
 		Parallel.For( 0, panels, p =>
 		{
-			var baseOut = p * K * NR;
-			var col0 = p * NR;
-			var width = Math.Min( NR, N - col0 );
+			var baseOut = p * K * nr;
+			var col0 = p * nr;
+			var width = Math.Min( nr, N - col0 );
 			for ( var k = 0; k < K; k++ )
 			{
 				var row = k * N + col0;
-				var o = baseOut + k * NR;
+				var o = baseOut + k * nr;
 				for ( var c = 0; c < width; c++ ) data[o + c] = b[row + c];
 			}
 		} );
-		return new PackedMatrix { K = K, N = N, Panels = panels, Data = data };
+		return new PackedMatrix { K = K, N = N, Panels = panels, Nr = nr, Data = data };
 	}
 
-	/// <summary>C[M,N] = A[M,K] · B (packed), optionally + bias[N].</summary>
-	public static void Gemm( float[] a, int aOffset, int M, PackedMatrix b, float[] c, int cOffset, ExecContext ctx )
+	/// <summary>C[M,N] = A[M,K] · B (packed). A rows are packed per chunk into [k][MR] micro-panels.</summary>
+	public static void Gemm( float[] a, int aOffset, int M, PackedMatrix b, float[] c, int cOffset, ExecContext ctx, float[] bias = null )
 	{
-		var K = b.K; var N = b.N;
-		const int chunkRows = 48; // 8 micro-row blocks: A chunk stays in L2 while panels stream through
+		var K = b.K; var N = b.N; var mr = MR; var nr = b.Nr;
+		var chunkRows = mr * 4;
 		var chunks = (M + chunkRows - 1) / chunkRows;
-		var useFma = Fma.IsSupported && Avx.IsSupported;
+		var fma = Fma.IsSupported && Avx.IsSupported;
 		void Chunk( int ci )
 		{
 			var r0 = ci * chunkRows;
 			var r1 = Math.Min( M, r0 + chunkRows );
-			fixed ( float* pa = a, pb = b.Data, pc = c )
+			var blocks = (r1 - r0 + mr - 1) / mr;
+			var packedA = new float[blocks * K * mr];
+			for ( var blk = 0; blk < blocks; blk++ )
+			{
+				var rows = Math.Min( mr, r1 - r0 - blk * mr );
+				var dst = blk * K * mr;
+				for ( var r = 0; r < rows; r++ )
+				{
+					var src = aOffset + (r0 + blk * mr + r) * K;
+					for ( var k = 0; k < K; k++ ) packedA[dst + k * mr + r] = a[src + k];
+				}
+			}
+			var acc = new float[mr * nr];
+			var biasPad = new float[nr];
+			fixed ( float* pa = packedA, pb = b.Data, pc = c, pacc = acc, pbias = biasPad )
 			{
 				for ( var p = 0; p < b.Panels; p++ )
 				{
-					var panel = pb + (long)p * K * NR;
-					var col0 = p * NR;
-					var width = Math.Min( NR, N - col0 );
-					for ( var r = r0; r < r1; r += MR )
+					var col0 = p * nr;
+					var width = Math.Min( nr, N - col0 );
+					var bp = pb + (long)p * K * nr;
+					for ( var blk = 0; blk < blocks; blk++ )
 					{
-						var rows = Math.Min( MR, r1 - r );
-						var arow = pa + aOffset + (long)r * K;
-						var crow = pc + cOffset + (long)r * N + col0;
-						if ( useFma ) Micro6x16( arow, K, panel, crow, N, rows, width );
-						else MicroPortable( arow, K, panel, crow, N, rows, width );
+						var rows = Math.Min( mr, r1 - r0 - blk * mr );
+						var ap = pa + (long)blk * K * mr;
+						var cp = pc + cOffset + (long)(r0 + blk * mr) * N + col0;
+						if ( UseAvx512 ) Micro12x32( ap, bp, K, pacc );
+						else if ( fma ) Micro6x16( ap, bp, K, pacc );
+						else MicroPortable( ap, bp, K, pacc, mr, nr );
+						if ( bias is not null )
+						{
+							for ( var j = 0; j < width; j++ ) pbias[j] = bias[col0 + j];
+							for ( var r = 0; r < rows; r++ )
+							{
+								var arow = pacc + r * nr;
+								for ( var j = 0; j < width; j++ ) arow[j] += pbias[j];
+							}
+						}
+						for ( var r = 0; r < rows; r++ )
+						{
+							var crow = cp + (long)r * N;
+							var arow = pacc + r * nr;
+							if ( width == nr ) Buffer.MemoryCopy( arow, crow, nr * 4, nr * 4 );
+							else for ( var j = 0; j < width; j++ ) crow[j] = arow[j];
+						}
 					}
 				}
 			}
@@ -81,75 +115,83 @@ public static unsafe class FastKernels
 			for ( var ci = 0; ci < chunks; ci++ ) Chunk( ci );
 	}
 
-	[MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization )]
-	static void Micro6x16( float* a, int K, float* panel, float* c, int ldc, int rows, int width )
+	[MethodImpl( MethodImplOptions.AggressiveOptimization )]
+	static void Micro12x32( float* a, float* b, int K, float* c )
+	{
+		Vector512<float> c0a = default, c0b = default, c1a = default, c1b = default, c2a = default, c2b = default,
+			c3a = default, c3b = default, c4a = default, c4b = default, c5a = default, c5b = default,
+			c6a = default, c6b = default, c7a = default, c7b = default, c8a = default, c8b = default,
+			c9a = default, c9b = default, c10a = default, c10b = default, c11a = default, c11b = default;
+		for ( var k = 0; k < K; k++ )
+		{
+			var b0 = Avx512F.LoadVector512( b );
+			var b1 = Avx512F.LoadVector512( b + 16 );
+			var v = Vector512.Create( a[0] ); c0a = Avx512F.FusedMultiplyAdd( v, b0, c0a ); c0b = Avx512F.FusedMultiplyAdd( v, b1, c0b );
+			v = Vector512.Create( a[1] ); c1a = Avx512F.FusedMultiplyAdd( v, b0, c1a ); c1b = Avx512F.FusedMultiplyAdd( v, b1, c1b );
+			v = Vector512.Create( a[2] ); c2a = Avx512F.FusedMultiplyAdd( v, b0, c2a ); c2b = Avx512F.FusedMultiplyAdd( v, b1, c2b );
+			v = Vector512.Create( a[3] ); c3a = Avx512F.FusedMultiplyAdd( v, b0, c3a ); c3b = Avx512F.FusedMultiplyAdd( v, b1, c3b );
+			v = Vector512.Create( a[4] ); c4a = Avx512F.FusedMultiplyAdd( v, b0, c4a ); c4b = Avx512F.FusedMultiplyAdd( v, b1, c4b );
+			v = Vector512.Create( a[5] ); c5a = Avx512F.FusedMultiplyAdd( v, b0, c5a ); c5b = Avx512F.FusedMultiplyAdd( v, b1, c5b );
+			v = Vector512.Create( a[6] ); c6a = Avx512F.FusedMultiplyAdd( v, b0, c6a ); c6b = Avx512F.FusedMultiplyAdd( v, b1, c6b );
+			v = Vector512.Create( a[7] ); c7a = Avx512F.FusedMultiplyAdd( v, b0, c7a ); c7b = Avx512F.FusedMultiplyAdd( v, b1, c7b );
+			v = Vector512.Create( a[8] ); c8a = Avx512F.FusedMultiplyAdd( v, b0, c8a ); c8b = Avx512F.FusedMultiplyAdd( v, b1, c8b );
+			v = Vector512.Create( a[9] ); c9a = Avx512F.FusedMultiplyAdd( v, b0, c9a ); c9b = Avx512F.FusedMultiplyAdd( v, b1, c9b );
+			v = Vector512.Create( a[10] ); c10a = Avx512F.FusedMultiplyAdd( v, b0, c10a ); c10b = Avx512F.FusedMultiplyAdd( v, b1, c10b );
+			v = Vector512.Create( a[11] ); c11a = Avx512F.FusedMultiplyAdd( v, b0, c11a ); c11b = Avx512F.FusedMultiplyAdd( v, b1, c11b );
+			a += 12; b += 32;
+		}
+		Avx512F.Store( c, c0a ); Avx512F.Store( c + 16, c0b );
+		Avx512F.Store( c + 32, c1a ); Avx512F.Store( c + 48, c1b );
+		Avx512F.Store( c + 64, c2a ); Avx512F.Store( c + 80, c2b );
+		Avx512F.Store( c + 96, c3a ); Avx512F.Store( c + 112, c3b );
+		Avx512F.Store( c + 128, c4a ); Avx512F.Store( c + 144, c4b );
+		Avx512F.Store( c + 160, c5a ); Avx512F.Store( c + 176, c5b );
+		Avx512F.Store( c + 192, c6a ); Avx512F.Store( c + 208, c6b );
+		Avx512F.Store( c + 224, c7a ); Avx512F.Store( c + 240, c7b );
+		Avx512F.Store( c + 256, c8a ); Avx512F.Store( c + 272, c8b );
+		Avx512F.Store( c + 288, c9a ); Avx512F.Store( c + 304, c9b );
+		Avx512F.Store( c + 320, c10a ); Avx512F.Store( c + 336, c10b );
+		Avx512F.Store( c + 352, c11a ); Avx512F.Store( c + 368, c11b );
+	}
+
+	[MethodImpl( MethodImplOptions.AggressiveOptimization )]
+	static void Micro6x16( float* a, float* b, int K, float* c )
 	{
 		Vector256<float> c00 = default, c01 = default, c10 = default, c11 = default, c20 = default, c21 = default,
 			c30 = default, c31 = default, c40 = default, c41 = default, c50 = default, c51 = default;
-		var a0 = a; var a1 = a + K; var a2 = a + 2 * K; var a3 = a + 3 * K; var a4 = a + 4 * K; var a5 = a + 5 * K;
-		if ( rows == MR )
-		{
-			for ( var k = 0; k < K; k++ )
-			{
-				var b0 = Avx.LoadVector256( panel + k * NR );
-				var b1 = Avx.LoadVector256( panel + k * NR + 8 );
-				var v = Vector256.Create( a0[k] ); c00 = Fma.MultiplyAdd( v, b0, c00 ); c01 = Fma.MultiplyAdd( v, b1, c01 );
-				v = Vector256.Create( a1[k] ); c10 = Fma.MultiplyAdd( v, b0, c10 ); c11 = Fma.MultiplyAdd( v, b1, c11 );
-				v = Vector256.Create( a2[k] ); c20 = Fma.MultiplyAdd( v, b0, c20 ); c21 = Fma.MultiplyAdd( v, b1, c21 );
-				v = Vector256.Create( a3[k] ); c30 = Fma.MultiplyAdd( v, b0, c30 ); c31 = Fma.MultiplyAdd( v, b1, c31 );
-				v = Vector256.Create( a4[k] ); c40 = Fma.MultiplyAdd( v, b0, c40 ); c41 = Fma.MultiplyAdd( v, b1, c41 );
-				v = Vector256.Create( a5[k] ); c50 = Fma.MultiplyAdd( v, b0, c50 ); c51 = Fma.MultiplyAdd( v, b1, c51 );
-			}
-		}
-		else
-		{
-			// partial row block: rows beyond the matrix read row 0 (results discarded)
-			if ( rows < 2 ) a1 = a0; if ( rows < 3 ) a2 = a0; if ( rows < 4 ) a3 = a0; if ( rows < 5 ) a4 = a0; if ( rows < 6 ) a5 = a0;
-			for ( var k = 0; k < K; k++ )
-			{
-				var b0 = Avx.LoadVector256( panel + k * NR );
-				var b1 = Avx.LoadVector256( panel + k * NR + 8 );
-				var v = Vector256.Create( a0[k] ); c00 = Fma.MultiplyAdd( v, b0, c00 ); c01 = Fma.MultiplyAdd( v, b1, c01 );
-				v = Vector256.Create( a1[k] ); c10 = Fma.MultiplyAdd( v, b0, c10 ); c11 = Fma.MultiplyAdd( v, b1, c11 );
-				v = Vector256.Create( a2[k] ); c20 = Fma.MultiplyAdd( v, b0, c20 ); c21 = Fma.MultiplyAdd( v, b1, c21 );
-				v = Vector256.Create( a3[k] ); c30 = Fma.MultiplyAdd( v, b0, c30 ); c31 = Fma.MultiplyAdd( v, b1, c31 );
-				v = Vector256.Create( a4[k] ); c40 = Fma.MultiplyAdd( v, b0, c40 ); c41 = Fma.MultiplyAdd( v, b1, c41 );
-				v = Vector256.Create( a5[k] ); c50 = Fma.MultiplyAdd( v, b0, c50 ); c51 = Fma.MultiplyAdd( v, b1, c51 );
-			}
-		}
-		Store( c, width, c00, c01 );
-		if ( rows > 1 ) Store( c + ldc, width, c10, c11 );
-		if ( rows > 2 ) Store( c + 2 * ldc, width, c20, c21 );
-		if ( rows > 3 ) Store( c + 3 * ldc, width, c30, c31 );
-		if ( rows > 4 ) Store( c + 4 * ldc, width, c40, c41 );
-		if ( rows > 5 ) Store( c + 5 * ldc, width, c50, c51 );
-	}
-
-	[MethodImpl( MethodImplOptions.AggressiveInlining )]
-	static void Store( float* c, int width, Vector256<float> lo, Vector256<float> hi )
-	{
-		if ( width == NR ) { Avx.Store( c, lo ); Avx.Store( c + 8, hi ); return; }
-		var tmp = stackalloc float[NR];
-		Avx.Store( tmp, lo ); Avx.Store( tmp + 8, hi );
-		for ( var i = 0; i < width; i++ ) c[i] = tmp[i];
-	}
-
-	static void MicroPortable( float* a, int K, float* panel, float* c, int ldc, int rows, int width )
-	{
-		var acc = stackalloc float[MR * NR];
-		for ( var i = 0; i < MR * NR; i++ ) acc[i] = 0;
 		for ( var k = 0; k < K; k++ )
 		{
-			var b = panel + k * NR;
-			for ( var r = 0; r < rows; r++ )
+			var b0 = Avx.LoadVector256( b );
+			var b1 = Avx.LoadVector256( b + 8 );
+			var v = Vector256.Create( a[0] ); c00 = Fma.MultiplyAdd( v, b0, c00 ); c01 = Fma.MultiplyAdd( v, b1, c01 );
+			v = Vector256.Create( a[1] ); c10 = Fma.MultiplyAdd( v, b0, c10 ); c11 = Fma.MultiplyAdd( v, b1, c11 );
+			v = Vector256.Create( a[2] ); c20 = Fma.MultiplyAdd( v, b0, c20 ); c21 = Fma.MultiplyAdd( v, b1, c21 );
+			v = Vector256.Create( a[3] ); c30 = Fma.MultiplyAdd( v, b0, c30 ); c31 = Fma.MultiplyAdd( v, b1, c31 );
+			v = Vector256.Create( a[4] ); c40 = Fma.MultiplyAdd( v, b0, c40 ); c41 = Fma.MultiplyAdd( v, b1, c41 );
+			v = Vector256.Create( a[5] ); c50 = Fma.MultiplyAdd( v, b0, c50 ); c51 = Fma.MultiplyAdd( v, b1, c51 );
+			a += 6; b += 16;
+		}
+		Avx.Store( c, c00 ); Avx.Store( c + 8, c01 );
+		Avx.Store( c + 16, c10 ); Avx.Store( c + 24, c11 );
+		Avx.Store( c + 32, c20 ); Avx.Store( c + 40, c21 );
+		Avx.Store( c + 48, c30 ); Avx.Store( c + 56, c31 );
+		Avx.Store( c + 64, c40 ); Avx.Store( c + 72, c41 );
+		Avx.Store( c + 80, c50 ); Avx.Store( c + 88, c51 );
+	}
+
+	static void MicroPortable( float* a, float* b, int K, float* c, int mr, int nr )
+	{
+		for ( var i = 0; i < mr * nr; i++ ) c[i] = 0;
+		for ( var k = 0; k < K; k++ )
+		{
+			var bk = b + k * nr;
+			for ( var r = 0; r < mr; r++ )
 			{
-				var s = a[r * K + k];
-				var row = acc + r * NR;
-				for ( var j = 0; j < NR; j++ ) row[j] += s * b[j];
+				var s = a[k * mr + r];
+				var row = c + r * nr;
+				for ( var j = 0; j < nr; j++ ) row[j] += s * bk[j];
 			}
 		}
-		for ( var r = 0; r < rows; r++ )
-			for ( var j = 0; j < width; j++ ) c[r * ldc + j] = acc[r * NR + j];
 	}
 
 	// ------------------------------------------------------------------ attention
@@ -446,6 +488,149 @@ public static unsafe class FastKernels
 		Op.Mul => a * b,
 		_ => a / b,
 	};
+
+	static readonly ConditionalWeakTable<Tensor, RotationInfo> RotationMaps = new();
+
+	/// <summary>Source index and sign per output column of a signed permutation matrix.</summary>
+	public sealed record RotationInfo( int[] Src, float[] Sign );
+
+	/// <summary>For a square matrix that is a signed permutation, (source index, sign) per output column; else null.</summary>
+	public static RotationInfo RotationMap( Tensor r )
+	{
+		if ( r.Rank != 2 || r.Shape[0] != r.Shape[1] || !r.IsFloat || r.Shape[0] > 256 ) return null;
+		if ( RotationMaps.TryGetValue( r, out var cached ) ) return cached;
+		var n = r.Shape[0];
+		var src = new int[n]; var sign = new float[n];
+		for ( var col = 0; col < n; col++ )
+		{
+			var found = -1;
+			for ( var row = 0; row < n; row++ )
+			{
+				var v = r.F[row * n + col];
+				if ( v == 0 ) continue;
+				if ( found >= 0 || MathF.Abs( MathF.Abs( v ) - 1 ) > 1e-6f ) return null;
+				found = row; sign[col] = v;
+			}
+			if ( found < 0 ) return null;
+			src[col] = found;
+		}
+		var info = new RotationInfo( src, sign );
+		RotationMaps.AddOrUpdate( r, info );
+		return info;
+	}
+
+	/// <summary>Fused rotary embedding: x*cos + (x·R)*sin with R a signed permutation; cos/sin hold one row
+	/// per position of the second-to-last axis of x.</summary>
+	public static Tensor Rope( Tensor x, Tensor cos, Tensor sin, Tensor r, ExecContext ctx )
+	{
+		var map = RotationMap( r ) ?? throw new InvalidOperationException( "Rope needs a signed permutation matrix." );
+		var d = x.Shape[^1];
+		var positions = x.Shape[^2];
+		if ( cos.Length != positions * d || sin.Length != positions * d )
+			throw new InvalidOperationException( "Rope cos/sin must have one row per position." );
+		var rows = x.Length / d;
+		var src = x.F; var cf = cos.F; var sf = sin.F;
+		var output = new float[x.Length];
+		var perm = map.Src; var sign = map.Sign;
+		void Row( int row )
+		{
+			var o = row * d;
+			var p = (row % positions) * d;
+			for ( var i = 0; i < d; i++ ) output[o + i] = src[o + i] * cf[p + i] + sign[i] * src[o + perm[i]] * sf[p + i];
+		}
+		if ( rows > 2048 ) Parallel.For( 0, rows, ctx.Parallel, Row ); else for ( var i = 0; i < rows; i++ ) Row( i );
+		return Tensor.Float( x.Shape, output );
+	}
+
+	/// <summary>a*b + c with broadcasting (inner blocks vectorised); null when the pattern isn't supported.</summary>
+	public static Tensor MulAdd( Tensor a, Tensor b, Tensor c, ExecContext ctx )
+	{
+		if ( !a.IsFloat || !b.IsFloat || !c.IsFloat ) return null;
+		var shape = OnnxOps.BroadcastShape( OnnxOps.BroadcastShape( a.Shape, b.Shape ), c.Shape );
+		var rank = shape.Length;
+		var s = new[] { Strides( a.Shape, shape ), Strides( b.Shape, shape ), Strides( c.Shape, shape ) };
+		var inner = 1; var split = rank;
+		var modes = new int[3];
+		for ( var dim = rank - 1; dim >= 0; dim-- )
+		{
+			if ( shape[dim] == 1 ) { split = dim; continue; }
+			var next = new int[3];
+			var ok = true;
+			for ( var k = 0; k < 3 && ok; k++ )
+			{
+				var st = s[k][dim];
+				next[k] = modes[k] switch
+				{
+					0 => st == inner ? 1 : st == 0 ? 2 : -1,
+					1 => st == inner ? 1 : -1,
+					_ => st == 0 ? 2 : -1,
+				};
+				ok = next[k] > 0;
+			}
+			if ( !ok ) break;
+			modes = next;
+			inner *= shape[dim];
+			split = dim;
+		}
+		if ( inner < 8 ) return null;
+		var total = Tensor.SizeOf( shape );
+		var outer = total / inner;
+		var result = new float[total];
+		var outerDims = shape.Take( split ).ToArray();
+		var offs = new int[3][];
+		for ( var k = 0; k < 3; k++ ) offs[k] = new int[outer];
+		{
+			var idx = new int[split];
+			var cur = new int[3];
+			for ( var o = 0; o < outer; o++ )
+			{
+				for ( var k = 0; k < 3; k++ ) offs[k][o] = cur[k];
+				for ( var dim = split - 1; dim >= 0; dim-- )
+				{
+					idx[dim]++;
+					for ( var k = 0; k < 3; k++ ) cur[k] += s[k][dim];
+					if ( idx[dim] < outerDims[dim] ) break;
+					for ( var k = 0; k < 3; k++ ) cur[k] -= s[k][dim] * outerDims[dim];
+					idx[dim] = 0;
+				}
+			}
+		}
+		var af = a.F; var bf = b.F; var cf = c.F;
+		var da = modes[0] != 2; var db = modes[1] != 2; var dc = modes[2] != 2;
+		var w = Vector<float>.Count;
+		void Block( int o )
+		{
+			var ra = offs[0][o]; var rb = offs[1][o]; var rc = offs[2][o];
+			var ro = o * inner;
+			var va = new Vector<float>( af[ra] ); var vb = new Vector<float>( bf[rb] ); var vc = new Vector<float>( cf[rc] );
+			var i = 0;
+			for ( ; i + w <= inner; i += w )
+			{
+				var x = da ? new Vector<float>( af, ra + i ) : va;
+				var y = db ? new Vector<float>( bf, rb + i ) : vb;
+				var z = dc ? new Vector<float>( cf, rc + i ) : vc;
+				(x * y + z).CopyTo( result, ro + i );
+			}
+			for ( ; i < inner; i++ )
+				result[ro + i] = af[da ? ra + i : ra] * bf[db ? rb + i : rb] + cf[dc ? rc + i : rc];
+		}
+		if ( (long)total > 1 << 15 ) Parallel.For( 0, outer, ctx.Parallel, Block ); else for ( var o = 0; o < outer; o++ ) Block( o );
+		return Tensor.Float( shape, result );
+	}
+
+	/// <summary>x * sigmoid(x).</summary>
+	public static Tensor SiLU( Tensor x, ExecContext ctx )
+	{
+		var src = x.F; var r = new float[src.Length];
+		void Chunk( int c )
+		{
+			var end = Math.Min( src.Length, (c + 1) * 16384 );
+			for ( var i = c * 16384; i < end; i++ ) { var v = src[i]; r[i] = v / (1f + MathF.Exp( -v )); }
+		}
+		var chunks = (src.Length + 16383) / 16384;
+		if ( chunks > 1 ) Parallel.For( 0, chunks, ctx.Parallel, Chunk ); else Chunk( 0 );
+		return Tensor.Float( x.Shape, r );
+	}
 
 	/// <summary>Vectorised logistic sigmoid.</summary>
 	public static Tensor Sigmoid( Tensor x, ExecContext ctx )

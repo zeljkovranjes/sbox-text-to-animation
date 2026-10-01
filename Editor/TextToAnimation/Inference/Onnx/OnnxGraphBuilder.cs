@@ -56,6 +56,19 @@ public sealed class OnnxGraphBuilder
         });
         return name;
     }
+    /// <summary>An initializer whose bytes live in an existing external data file (shared by several graphs).</summary>
+    public string ExternalReference(string name,int type,long[] shape,string location,long offset,long length)
+    {
+        Message(initializers,5,t=>
+        {
+            foreach(var d in shape)Int(t,1,d);Int(t,2,type);Text(t,8,name);
+            Message(t,13,e=>{Text(e,1,"location");Text(e,2,location);});
+            Message(t,13,e=>{Text(e,1,"offset");Text(e,2,offset.ToString(System.Globalization.CultureInfo.InvariantCulture));});
+            Message(t,13,e=>{Text(e,1,"length");Text(e,2,length.ToString(System.Globalization.CultureInfo.InvariantCulture));});
+            Int(t,14,1); // EXTERNAL
+        });
+        return name;
+    }
     /// <summary>A small integer constant stored in the graph, such as a reshape target.</summary>
     public string Constant(params long[] values)
     {
