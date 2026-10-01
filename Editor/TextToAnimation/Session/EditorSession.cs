@@ -300,6 +300,40 @@ public sealed class EditorSession
 		return true;
 	}
 
+	// ------------------------------------------------------------------ interactive posing
+
+	bool _interactive;
+
+	/// <summary>Starts a drag (one undo step for the whole gesture).</summary>
+	public void BeginInteractiveEdit( string label )
+	{
+		if ( ActiveClip is null || Busy || _interactive ) return;
+		_interactive = true;
+		UndoFor( ActiveClip ).Record( ActiveClip, label );
+		Notify( SessionChange.Undo );
+	}
+
+	/// <summary>Keys <paramref name="bone"/> at <paramref name="frame"/> so its local transform becomes <paramref name="targetLocal"/>.</summary>
+	public void SetPoseKey( int bone, int frame, XForm targetLocal )
+	{
+		var clip = ActiveClip;
+		if ( clip is null || frame < 0 || frame >= clip.FrameCount ) return;
+		var name = Rig.Skeleton[bone].Name;
+		var baseLocal = clip.Frames[frame][bone];
+		clip.Keys.SetKey( name, frame, KeyLayer.DeltaBetween( baseLocal, targetLocal ) );
+		clip.Revision++;
+		Playhead = frame;
+		Notify( SessionChange.ClipData );
+	}
+
+	public void EndInteractiveEdit()
+	{
+		if ( !_interactive ) return;
+		_interactive = false;
+		if ( ActiveClip is not null ) ScheduleSave( ActiveClip );
+		Notify( SessionChange.ClipData | SessionChange.Undo );
+	}
+
 	public void UndoEdit()
 	{
 		if ( ActiveClip is null || Busy ) return;
