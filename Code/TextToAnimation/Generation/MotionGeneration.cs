@@ -100,5 +100,5 @@ public interface IMotionGenerator
 
     /// <summary>Runs on a worker thread; must honour cancellation and never touch engine objects.</summary>
     Task<IReadOnlyList<GeneratedMotion>> GenerateAsync(MotionRig rig, GenerationRequest request,
-        IProgress<GenerationProgress>? progress, CancellationToken token);
+        Action<GenerationProgress>? progress, CancellationToken token);
 }

@@ -126,7 +126,7 @@ public sealed class GeneratorService
 		var generator = await GetGeneratorAsync( loadProgress, token );
 		var problems = generator.Validate( rig );
 		if ( problems.Count > 0 ) throw new InvalidOperationException( string.Join( " ", problems ) );
-		return await Task.Run( () => generator.GenerateAsync( rig, request, progress, token ), token );
+		return await Task.Run( () => generator.GenerateAsync( rig, request, progress is null ? null : progress.Report, token ), token );
 	}
 
 	public void Remove()

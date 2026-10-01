@@ -21,7 +21,10 @@ public sealed class ClipEvent
     public double? Volume { get; set; }
     /// <summary>True when the event was generated automatically (footsteps) and may be regenerated.</summary>
     public bool Automatic { get; set; }
-    public ClipEvent Clone() => (ClipEvent)MemberwiseClone();
+    public ClipEvent Clone() => new()
+    {
+        EventClass = EventClass, Frame = Frame, Attachment = Attachment, Foot = Foot, Volume = Volume, Automatic = Automatic,
+    };
 }
 
 /// <summary>Per-clip options used when the clip is saved into a vmdl or exported.</summary>
@@ -34,7 +37,11 @@ public sealed class ClipExportSettings
     public bool AdditiveVariant { get; set; }
     public int AdditiveReferenceFrame { get; set; }
     public bool MirroredVariant { get; set; }
-    public ClipExportSettings Clone() => (ClipExportSettings)MemberwiseClone();
+    public ClipExportSettings Clone() => new()
+    {
+        SequenceName = SequenceName, RootMotion = RootMotion, Footsteps = Footsteps, AdditiveVariant = AdditiveVariant,
+        AdditiveReferenceFrame = AdditiveReferenceFrame, MirroredVariant = MirroredVariant,
+    };
 }
 
 /// <summary>The settings that produced a generated clip, kept so it can be regenerated or varied.</summary>

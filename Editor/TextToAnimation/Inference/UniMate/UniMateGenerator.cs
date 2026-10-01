@@ -53,12 +53,12 @@ public sealed class UniMateGenerator : IMotionGenerator
 	}
 
 	public Task<IReadOnlyList<GeneratedMotion>> GenerateAsync( MotionRig rig, GenerationRequest request,
-		IProgress<GenerationProgress> progress, CancellationToken token )
+		Action<GenerationProgress> progress, CancellationToken token )
 		=> Task.Run( () => Generate( rig, request, progress, token ), token );
 
-	IReadOnlyList<GeneratedMotion> Generate( MotionRig rig, GenerationRequest request, IProgress<GenerationProgress> progress, CancellationToken token )
+	IReadOnlyList<GeneratedMotion> Generate( MotionRig rig, GenerationRequest request, Action<GenerationProgress> progress, CancellationToken token )
 	{
-		progress?.Report( new GenerationProgress( "Preparing the skeleton", 0f ) );
+		progress?.Invoke( new GenerationProgress( "Preparing the skeleton", 0f ) );
 		var (uniRig, prep) = Prepare( rig, token );
 		var takes = Math.Max( 1, request.Count );
 		var steps = request.Steps > 0 ? request.Steps : 24;
@@ -83,7 +83,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 			var seed = request.Seed + take * 7919;
 			var notes = new List<string>();
 			List<XForm[]> frames;
-			void Report( string stage, float fraction ) => progress?.Report( new GenerationProgress(
+			void Report( string stage, float fraction ) => progress?.Invoke( new GenerationProgress(
 				takes > 1 ? $"{stage} (take {take + 1} of {takes})" : stage, (take + Math.Clamp( fraction, 0, 1 )) / takes ) );
 
 			switch ( request.Mode )
@@ -143,7 +143,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 			var output = Resample( frames, UniMateModel.Fps, request.OutputFps );
 			results.Add( new GeneratedMotion { Frames = output, Fps = request.OutputFps, Seed = seed, Notes = notes } );
 		}
-		progress?.Report( new GenerationProgress( "Done", 1f ) );
+		progress?.Invoke( new GenerationProgress( "Done", 1f ) );
 		return results;
 	}
 

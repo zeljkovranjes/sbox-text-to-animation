@@ -29,7 +29,7 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	XForm[] _pose = Array.Empty<XForm>();
 	bool _dragging;
 
-	float _yaw = 145f, _pitch = 15f, _distance = 140f;
+	float _yaw = 35f, _pitch = 12f, _distance = 140f;
 	Vector3 _target = new( 0, 0, 36 );
 	Vector3 _pan;
 	Vector2 _lastMouse;
