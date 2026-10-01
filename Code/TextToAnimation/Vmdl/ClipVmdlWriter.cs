@@ -97,7 +97,7 @@ public static class ClipVmdlWriter
                 SourceFilename = dmxPath,
                 Looping = clip.Looping,
                 ExtractMotion = clip.Export.RootMotion == ClipRootMotion.Extract,
-                Events = clip.Events.Select(ToEvent).ToList(),
+                Events = clip.Events.Where(e => clip.Export.Footsteps || e.EventClass != FootstepEvents.FootstepEventClass).Select(ToEvent).ToList(),
             };
             if (request.ReplaceExisting) replaced.Add((seq, entry)); else newEntries.Add(entry);
 
