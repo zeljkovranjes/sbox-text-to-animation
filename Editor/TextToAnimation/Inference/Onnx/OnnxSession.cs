@@ -21,6 +21,9 @@ public sealed class OnnxSession
 	public IReadOnlyList<string> InputNames { get; }
 	public IReadOnlyList<string> OutputNames { get; }
 
+	/// <summary>When set, accumulates time per operator type (diagnostics).</summary>
+	public Dictionary<string, double> Profile { get; set; }
+
 	/// <summary>Worker threads used by the heavy kernels.</summary>
 	public int MaxThreads { get => _ctx.MaxThreads; set => _ctx.MaxThreads = Math.Max( 1, value ); }
 
@@ -34,6 +37,7 @@ public sealed class OnnxSession
 		{
 			token.ThrowIfCancellationRequested();
 			_constants[init.Name] = Tensor.FromInitializer( init, model.BaseDirectory );
+			_ctx.Constants.Add( _constants[init.Name] );
 			init.Raw = null; // keep only the decoded copy
 		}
 		_order = TopologicalOrder( model.Graph );
@@ -70,10 +74,16 @@ public sealed class OnnxSession
 					throw new InvalidOperationException( $"{node} needs \"{name}\" which hasn't been computed." );
 			}
 			Tensor[] outputs;
+			var started = Profile is null ? 0 : System.Diagnostics.Stopwatch.GetTimestamp();
 			try { outputs = OnnxOps.Run( node, args, _ctx ); }
 			catch ( Exception e ) when ( e is not OperationCanceledException )
 			{
 				throw new InvalidOperationException( $"{node} failed ({string.Join( ", ", args.Select( a => a?.ToString() ?? "-" ) )}): {e.Message}", e );
+			}
+			if ( Profile is not null )
+			{
+				var ms = System.Diagnostics.Stopwatch.GetElapsedTime( started ).TotalMilliseconds;
+				Profile[node.OpType] = Profile.GetValueOrDefault( node.OpType ) + ms;
 			}
 			for ( var k = 0; k < node.Outputs.Length && k < outputs.Length; k++ )
 				if ( node.Outputs[k].Length > 0 ) values[node.Outputs[k]] = outputs[k];

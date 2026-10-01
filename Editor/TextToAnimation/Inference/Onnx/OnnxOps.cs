@@ -11,6 +11,10 @@ namespace TextToAnimation.Editor.Inference.Onnx;
 public sealed class ExecContext
 {
 	public readonly Dictionary<Tensor, Tensor> TransposedCache = new( ReferenceEqualityComparer.Instance );
+	/// <summary>Packed GEMM panels of constant matrices (weights), built on first use.</summary>
+	public readonly Dictionary<Tensor, FastKernels.PackedMatrix> Packed = new( ReferenceEqualityComparer.Instance );
+	/// <summary>Tensors that never change between runs (initializers).</summary>
+	public readonly HashSet<Tensor> Constants = new( ReferenceEqualityComparer.Instance );
 	public int MaxThreads = Math.Max( 1, Environment.ProcessorCount - 1 );
 	public ParallelOptions Parallel => new() { MaxDegreeOfParallelism = MaxThreads };
 }
@@ -28,10 +32,13 @@ public static class OnnxOps
 	{
 		["Identity"] = ( n, i, c ) => new[] { i[0] },
 		["Dropout"] = ( n, i, c ) => new[] { i[0], Tensor.Bool( i[0].Shape ) },
-		["Add"] = ( n, i, c ) => new[] { Binary( i[0], i[1], BinOp.Add ) },
-		["Sub"] = ( n, i, c ) => new[] { Binary( i[0], i[1], BinOp.Sub ) },
-		["Mul"] = ( n, i, c ) => new[] { Binary( i[0], i[1], BinOp.Mul ) },
-		["Div"] = ( n, i, c ) => new[] { Binary( i[0], i[1], BinOp.Div ) },
+		["Add"] = ( n, i, c ) => new[] { FastBinary( i[0], i[1], BinOp.Add, FastKernels.Op.Add, c ) },
+		["Sub"] = ( n, i, c ) => new[] { FastBinary( i[0], i[1], BinOp.Sub, FastKernels.Op.Sub, c ) },
+		["Mul"] = ( n, i, c ) => new[] { FastBinary( i[0], i[1], BinOp.Mul, FastKernels.Op.Mul, c ) },
+		["Div"] = ( n, i, c ) => new[] { FastBinary( i[0], i[1], BinOp.Div, FastKernels.Op.Div, c ) },
+		["RMSNormalization"] = ( n, i, c ) => new[] { FastKernels.RmsNorm( i[0], i[1], (int)n.GetInt( "axis", -1 ), n.GetFloat( "epsilon", 1e-5f ), c ) },
+		["Attention"] = ( n, i, c ) => new[] { FastKernels.Attention( i[0], i[1], i[2], i.Length > 3 ? i[3] : null,
+			n.Attributes.ContainsKey( "scale" ) ? n.GetFloat( "scale", 1f ) : 1f / MathF.Sqrt( i[0].Shape[^1] ), c ) },
 		["Pow"] = ( n, i, c ) => new[] { Binary( i[0], i[1], BinOp.Pow ) },
 		["Max"] = ( n, i, c ) => new[] { i.Skip( 1 ).Aggregate( i[0], ( a, b ) => Binary( a, b, BinOp.Max ) ) },
 		["Min"] = ( n, i, c ) => new[] { i.Skip( 1 ).Aggregate( i[0], ( a, b ) => Binary( a, b, BinOp.Min ) ) },
@@ -57,7 +64,7 @@ public static class OnnxOps
 		["Ceil"] = ( n, i, c ) => new[] { Unary( i[0], MathF.Ceiling ) },
 		["Round"] = ( n, i, c ) => new[] { Unary( i[0], v => MathF.Round( v, MidpointRounding.ToEven ) ) },
 		["Reciprocal"] = ( n, i, c ) => new[] { Unary( i[0], v => 1f / v ) },
-		["Sigmoid"] = ( n, i, c ) => new[] { Unary( i[0], v => 1f / (1f + MathF.Exp( -v )) ) },
+		["Sigmoid"] = ( n, i, c ) => new[] { FastKernels.Sigmoid( i[0], c ) },
 		["Relu"] = ( n, i, c ) => new[] { Unary( i[0], v => v > 0 ? v : 0 ) },
 		["Erf"] = ( n, i, c ) => new[] { Unary( i[0], Erf ) },
 		["Gelu"] = ( n, i, c ) => new[] { Unary( i[0], n.GetString( "approximate", "none" ) == "tanh"
@@ -76,10 +83,10 @@ public static class OnnxOps
 		["Flatten"] = ( n, i, c ) => new[] { Flatten( i[0], (int)n.GetInt( "axis", 1 ) ) },
 		["Unsqueeze"] = ( n, i, c ) => new[] { Unsqueeze( i[0], i.Length > 1 ? i[1].AsLongs() : n.GetInts( "axes" ) ) },
 		["Squeeze"] = ( n, i, c ) => new[] { Squeeze( i[0], i.Length > 1 && i[1] is not null ? i[1].AsLongs() : n.GetInts( "axes" ) ) },
-		["Transpose"] = ( n, i, c ) => new[] { Transpose( i[0], n.GetInts( "perm" ) ) },
+		["Transpose"] = ( n, i, c ) => new[] { FastTranspose( i[0], n.GetInts( "perm" ) ) },
 		["Concat"] = ( n, i, c ) => new[] { Concat( i.Where( t => t is not null ).ToArray(), (int)n.GetInt( "axis", 0 ) ) },
 		["Split"] = ( n, i, c ) => Split( n, i ),
-		["Slice"] = ( n, i, c ) => new[] { Slice( i ) },
+		["Slice"] = ( n, i, c ) => new[] { FastSlice( i ) ?? Slice( i ) },
 		["Gather"] = ( n, i, c ) => new[] { Gather( i[0], i[1], (int)n.GetInt( "axis", 0 ) ) },
 		["GatherElements"] = ( n, i, c ) => new[] { GatherElements( i[0], i[1], (int)n.GetInt( "axis", 0 ) ) },
 		["Expand"] = ( n, i, c ) => new[] { Expand( i[0], i[1].AsLongs() ) },
@@ -118,6 +125,38 @@ public static class OnnxOps
 	// ======================================================================== elementwise
 
 	enum BinOp { Add, Sub, Mul, Div, Pow, Max, Min, Mod, FMod }
+
+	static Tensor FastBinary( Tensor a, Tensor b, BinOp op, FastKernels.Op fast, ExecContext ctx )
+	{
+		if ( a.IsFloat && b.IsFloat && (a.Length > 64 || b.Length > 64) )
+		{
+			var r = FastKernels.Binary( a, b, fast, ctx );
+			if ( r is not null ) return r;
+		}
+		return Binary( a, b, op );
+	}
+
+	static Tensor FastTranspose( Tensor t, long[] perm )
+	{
+		var p = perm is { Length: > 0 } ? perm.Select( x => (int)x ).ToArray() : Enumerable.Range( 0, t.Rank ).Reverse().ToArray();
+		if ( t.Rank >= 2 && p[^1] == t.Rank - 1 && !t.IsBool && t.Shape[^1] >= 4 ) return FastKernels.TransposeRuns( t, p );
+		return Transpose( t, perm );
+	}
+
+	static Tensor FastSlice( Tensor[] i )
+	{
+		var t = i[0];
+		var starts = i[1].AsLongs(); var ends = i[2].AsLongs();
+		if ( starts.Length != 1 ) return null;
+		var axis = i.Length > 3 && i[3] is not null ? (int)i[3].AsLongs()[0] : 0;
+		if ( axis < 0 ) axis += t.Rank;
+		if ( i.Length > 4 && i[4] is not null && i[4].AsLongs()[0] != 1 ) return null;
+		var dim = t.Shape[axis];
+		long s = starts[0], e = ends[0];
+		if ( s < 0 ) s += dim; if ( e < 0 ) e += dim;
+		s = Math.Clamp( s, 0, dim ); e = Math.Clamp( e, 0, dim );
+		return FastKernels.SliceAxis( t, axis, (int)s, (int)Math.Max( s, e ) );
+	}
 	enum CmpOp { Eq, Lt, Le, Gt, Ge }
 
 	public static int[] BroadcastShape( int[] a, int[] b )
@@ -513,7 +552,7 @@ public static class OnnxOps
 		long start = 0;
 		for ( var k = 0; k < sizes.Length; k++ )
 		{
-			results[k] = SliceAxis( t, axis, (int)start, (int)(start + sizes[k]) );
+			results[k] = FastKernels.SliceAxis( t, axis, (int)start, (int)(start + sizes[k]) );
 			start += sizes[k];
 		}
 		return results;
@@ -850,9 +889,28 @@ public static class OnnxOps
 
 	// ======================================================================== matrix multiply
 
+
+	/// <summary>A[..., K] x B[K, N] with B packed for the register-blocked GEMM (cached when B is a constant).</summary>
+	static Tensor MatMulPacked( Tensor a, Tensor b, ExecContext ctx )
+	{
+		int K = b.Shape[0], N = b.Shape[1];
+		var M = a.Length / Math.Max( 1, K );
+		FastKernels.PackedMatrix packed;
+		if ( ctx.Constants.Contains( b ) )
+		{
+			lock ( ctx.Packed )
+				if ( !ctx.Packed.TryGetValue( b, out packed ) ) ctx.Packed[b] = packed = FastKernels.Pack( b.F, K, N );
+		}
+		else packed = FastKernels.Pack( b.F, K, N );
+		var c = new float[M * N];
+		FastKernels.Gemm( a.F, 0, M, packed, c, 0, ctx );
+		return Tensor.Float( a.Shape.Take( a.Rank - 1 ).Append( N ).ToArray(), c );
+	}
+
 	/// <summary>NumPy matmul with batch broadcasting.</summary>
 	public static Tensor MatMul( Tensor a, Tensor b, ExecContext ctx )
 	{
+		if ( b.Rank == 2 && a.Rank >= 2 && a.Shape[^1] == b.Shape[0] && a.IsFloat && b.IsFloat ) return MatMulPacked( a, b, ctx );
 		var aShape = a.Rank == 1 ? new[] { 1, a.Shape[0] } : a.Shape;
 		var bShape = b.Rank == 1 ? new[] { b.Shape[0], 1 } : b.Shape;
 		int M = aShape[^2], K = aShape[^1], N = bShape[^1];
@@ -918,7 +976,11 @@ public static class OnnxOps
 		if ( n.GetInt( "transA", 0 ) == 1 ) a = Transpose( a, new long[] { 1, 0 } );
 		if ( n.GetInt( "transB", 0 ) == 1 )
 		{
-			if ( !ctx.TransposedCache.TryGetValue( b, out var bt ) ) ctx.TransposedCache[b] = bt = Transpose( b, new long[] { 1, 0 } );
+			if ( !ctx.TransposedCache.TryGetValue( b, out var bt ) )
+			{
+				ctx.TransposedCache[b] = bt = Transpose( b, new long[] { 1, 0 } );
+				if ( ctx.Constants.Contains( b ) ) ctx.Constants.Add( bt );
+			}
 			b = bt;
 		}
 		var y = MatMul( a, b, ctx );
