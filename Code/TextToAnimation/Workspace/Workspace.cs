@@ -22,6 +22,12 @@ public sealed class AnimationWorkspace
     /// <summary>Hash of the skeleton's bone names and hierarchy when the workspace was last opened.</summary>
     public string SkeletonFingerprint { get; set; } = "";
 
+    /// <summary>
+    /// When the model's source file was created, as last seen (null for workspaces from before this was recorded).
+    /// A model deleted and made again at the same path has a newer one: it is a different model.
+    /// </summary>
+    public DateTime? ModelFileCreatedUtc { get; set; }
+
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime ModifiedUtc { get; set; } = DateTime.UtcNow;
 

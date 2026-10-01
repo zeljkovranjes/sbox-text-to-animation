@@ -101,8 +101,8 @@ public sealed class TextToAnimationWindow : Widget
 
 		Session.Changed += OnSessionChanged;
 		Session.Status += SetStatus;
-		Flow.Progress += line => { _lastProgress = line; _indicator?.SetMessage( line ); };
-		GeneratorService.Instance.StateChanged += () => MainThread.Queue( RefreshAll );
+		Flow.Progress += line => { _lastProgress = line; if ( _indicator.IsValid() ) _indicator.SetMessage( line ); };
+		GeneratorService.Instance.StateChanged += OnGeneratorStateChanged;
 		RefreshAll();
 		SetStatus( "Choose a model to start.", Tone.Neutral );
 	}
@@ -157,8 +157,12 @@ public sealed class TextToAnimationWindow : Widget
 		e.Menu.AddOption( "Animate with Text to Animation", Icon, () => _ = Open().OpenModelAsync( asset ) );
 	}
 
+	// the service outlives this window: a closed window must not react to it (its widgets are gone)
+	void OnGeneratorStateChanged() => MainThread.Queue( () => { if ( this.IsValid() ) RefreshAll(); } );
+
 	public override void OnDestroyed()
 	{
+		GeneratorService.Instance.StateChanged -= OnGeneratorStateChanged;
 		base.OnDestroyed();
 		Session.FlushSave();
 		Flow.Cancel();
@@ -693,7 +697,7 @@ public sealed class TextToAnimationWindow : Widget
 
 	void RefreshAll()
 	{
-		if ( _editPrompt is null ) return;
+		if ( _editPrompt is null || !this.IsValid() ) return;
 		var hasModel = Session.HasModel;
 		var clip = Session.ActiveClip;
 		var busy = Session.Busy;

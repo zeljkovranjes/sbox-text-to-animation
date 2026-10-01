@@ -34,14 +34,17 @@ public sealed class DownloadStrip : Widget
 		_download.Clicked = () => _ = DownloadAsync();
 		_pause = Layout.Add( new TaButton( this, "Pause", "pause", () => _flow.Cancel(), "Stop for now; it resumes where it stopped", 28 ) );
 		_flow.Progress += OnProgress;
-		GeneratorService.Instance.StateChanged += () => MainThread.Queue( Refresh );
+		GeneratorService.Instance.StateChanged += OnStateChanged;
 		Refresh();
 	}
+
+	void OnStateChanged() => MainThread.Queue( Refresh );
 
 	public override void OnDestroyed()
 	{
 		base.OnDestroyed();
 		_flow.Progress -= OnProgress;
+		GeneratorService.Instance.StateChanged -= OnStateChanged;
 	}
 
 	async System.Threading.Tasks.Task DownloadAsync()

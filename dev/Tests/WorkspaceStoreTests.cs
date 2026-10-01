@@ -117,4 +117,20 @@ public class WorkspaceStoreTests : IDisposable
         store.SavePromptHistory(ws.Id, new[] { new PromptHistoryEntry { Prompt = "jump" }, new PromptHistoryEntry { Prompt = "  " } });
         Assert.Equal(new[] { "jump" }, store.LoadPromptHistory(ws.Id).Select(e => e.Prompt)); // blank prompts are dropped
     }
+
+    /// <summary>A replaced model's workspace is set aside: the path no longer finds it, its files stay.</summary>
+    [Fact]
+    public void ForgettingAPathKeepsTheOldWorkspaceFiles()
+    {
+        var store = new WorkspaceStore(_dir);
+        var created = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+        var ws = new AnimationWorkspace { ModelPath = "models/citizen.vmdl", ModelName = "citizen", ModelFileCreatedUtc = created };
+        ws.Clips.Add(Fixtures.Walk(_rig));
+        store.Save(ws, _rig.Skeleton);
+        Assert.Equal(created, store.Load(ws.Id, _rig.Skeleton, new List<string>()).ModelFileCreatedUtc);
+        Assert.Equal(ws.Id, store.FindWorkspaceFor("models/citizen.vmdl"));
+        store.Forget("Models/Citizen.vmdl");
+        Assert.Null(store.FindWorkspaceFor("models/citizen.vmdl"));
+        Assert.Single(store.Load(ws.Id, _rig.Skeleton, new List<string>()).Clips);
+    }
 }

@@ -120,6 +120,24 @@ public sealed class EditorSession
 		return string.IsNullOrEmpty( project ) ? null : Path.Combine( project, "text_to_animation", "workspaces" );
 	}
 
+	/// <summary>
+	/// Why the model file at a workspace's path isn't the one the workspace was made for, or null when it is: the
+	/// file was created after the one the workspace saw (deleted and made again), or none of the animations saved into
+	/// the old model are in it.
+	/// </summary>
+	static string ReplacedModel( AnimationWorkspace ws, Model model, DateTime? fileCreated )
+	{
+		if ( ws.ModelFileCreatedUtc is { } seen && fileCreated is { } now && Math.Abs( (now - seen).TotalSeconds ) > 2 )
+			return "the file was created again";
+		// workspaces from before the creation time was recorded: a file newer than the workspace's last change
+		if ( ws.ModelFileCreatedUtc is null && fileCreated is { } created && created > ws.ModifiedUtc.AddMinutes( 1 ) )
+			return "the file is newer than these animations";
+		var saved = ws.Clips.Where( c => c.SavedUtc is not null ).Select( c => c.EffectiveSequenceName ).Distinct().ToList();
+		if ( saved.Count > 0 && !saved.Any( model.AnimationNames.Contains ) )
+			return "none of the animations saved into the old model are in it";
+		return null;
+	}
+
 	/// <summary>Opens (or creates) the workspace of a model. Returns an error message or null.</summary>
 	public async Task<string> OpenModelAsync( Asset asset )
 	{
@@ -165,6 +183,16 @@ public sealed class EditorSession
 		{
 			ws = new AnimationWorkspace();
 		}
+		// a model deleted and made again at the same path is a different model: its animations don't carry over
+		var fileCreated = vmdl is not null ? EngineThread.Try( () => (DateTime?)File.GetCreationTimeUtc( vmdl ) ) : null;
+		if ( existing is { } oldId && ws.Clips.Count > 0 && ReplacedModel( ws, model, fileCreated ) is { } why )
+		{
+			store.Forget( asset.Path );
+			LoadWarnings.Clear();
+			LoadWarnings.Add( $"{asset.Name} is a new file at this path ({why}), so it starts with no animations. The {ws.Clips.Count} made for the old model were kept, not deleted (workspace {oldId:N})." );
+			ws = new AnimationWorkspace();
+		}
+		ws.ModelFileCreatedUtc = fileCreated;
 		ws.ModelPath = asset.Path;
 		ws.ModelName = asset.Name;
 		ws.SkeletonFingerprint = fingerprint;

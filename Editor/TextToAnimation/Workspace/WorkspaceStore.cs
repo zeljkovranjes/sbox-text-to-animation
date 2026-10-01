@@ -84,6 +84,15 @@ public sealed class WorkspaceStore
     public Guid? FindWorkspaceFor(string modelPath)
         => ReadIndex().Models.TryGetValue(AnimationWorkspace.NormalizePath(modelPath), out var id) && File.Exists(ManifestPath(id)) ? id : null;
 
+    /// <summary>
+    /// Stops using a model's workspace for that model path (a new model now lives there); its files stay on disk.
+    /// </summary>
+    public void Forget(string modelPath)
+    {
+        var index = ReadIndex();
+        if (index.Models.Remove(AnimationWorkspace.NormalizePath(modelPath))) WriteIndex(index);
+    }
+
     /// <summary>All known workspaces: (model path, id).</summary>
     public IReadOnlyList<(string ModelPath, Guid Id)> List()
         => ReadIndex().Models.Where(kv => File.Exists(ManifestPath(kv.Value))).Select(kv => (kv.Key, kv.Value)).OrderBy(x => x.Key).ToList();
@@ -97,6 +106,7 @@ public sealed class WorkspaceStore
         public string ModelPath { get; set; } = "";
         public string ModelName { get; set; } = "";
         public string SkeletonFingerprint { get; set; } = "";
+        public DateTime? ModelFileCreatedUtc { get; set; }
         public DateTime CreatedUtc { get; set; }
         public DateTime ModifiedUtc { get; set; }
         public Guid? ActiveClipId { get; set; }
@@ -143,7 +153,7 @@ public sealed class WorkspaceStore
 
         var dto = new WorkspaceDto
         {
-            Id = ws.Id, ModelPath = ws.ModelPath, ModelName = ws.ModelName, SkeletonFingerprint = ws.SkeletonFingerprint,
+            Id = ws.Id, ModelPath = ws.ModelPath, ModelName = ws.ModelName, SkeletonFingerprint = ws.SkeletonFingerprint, ModelFileCreatedUtc = ws.ModelFileCreatedUtc,
             CreatedUtc = ws.CreatedUtc, ModifiedUtc = ws.ModifiedUtc, ActiveClipId = ws.ActiveClipId, DefaultFps = ws.DefaultFps, RootCompensation = ws.RootCompensation,
             Clips = ws.Clips.Select(ToDto).ToList(),
         };
@@ -167,7 +177,7 @@ public sealed class WorkspaceStore
         var ws = new AnimationWorkspace
         {
             Id = dto.Id, ModelPath = dto.ModelPath, ModelName = dto.ModelName, SkeletonFingerprint = dto.SkeletonFingerprint,
-            CreatedUtc = dto.CreatedUtc, ModifiedUtc = dto.ModifiedUtc, ActiveClipId = dto.ActiveClipId, DefaultFps = dto.DefaultFps, RootCompensation = dto.RootCompensation,
+            ModelFileCreatedUtc = dto.ModelFileCreatedUtc, CreatedUtc = dto.CreatedUtc, ModifiedUtc = dto.ModifiedUtc, ActiveClipId = dto.ActiveClipId, DefaultFps = dto.DefaultFps, RootCompensation = dto.RootCompensation,
         };
         foreach (var c in dto.Clips)
         {

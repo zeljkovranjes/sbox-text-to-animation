@@ -322,6 +322,21 @@ public static class EditorGate
 		Check( "workspace reloads", error is null && reopened.Workspace.Clips.Count == clipCount, $"{reopened.Workspace?.Clips.Count}/{clipCount}" );
 		Check( "prompt history persists", reopened.PromptHistory.Count == session.PromptHistory.Count && reopened.PromptHistory.Count > 0, $"{reopened.PromptHistory.Count}/{session.PromptHistory.Count}" );
 
+		// ---- 11b. a model deleted and made again at the same path starts fresh; the old animations are set aside, not lost
+		{
+			var vmdlFile = ModelBridge.SourcePathOf( asset );
+			var vmdlNow = File.ReadAllText( vmdlFile );
+			File.Delete( vmdlFile );
+			File.WriteAllText( vmdlFile, vmdlNow );
+			File.SetCreationTimeUtc( vmdlFile, DateTime.UtcNow ); // Windows gives a file re-made within 15 s its old creation time
+			var remade = new EditorSession();
+			var remadeError = await remade.OpenModelAsync( asset );
+			var oldFolder = Path.Combine( root, "text_to_animation", "workspaces", session.Workspace.Id.ToString( "N" ) );
+			Check( "a model made again at the same path starts with no animations", remadeError is null && remade.Workspace.Clips.Count == 0 && remade.LoadWarnings.Any( w => w.Contains( "new file" ) ),
+				$"{remade.Workspace?.Clips.Count} clips; {string.Join( " ", remade.LoadWarnings )}" );
+			Check( "the old model's animations are kept", Directory.Exists( oldFolder ) && Directory.GetFiles( Path.Combine( oldFolder, "clips" ) ).Length == clipCount, oldFolder );
+		}
+
 		// ---- 12. backups exist
 		var backups = Path.Combine( root, "text_to_animation", "backups" );
 		Check( "backups kept", Directory.Exists( backups ) && Directory.GetFiles( backups ).Length > 0 );

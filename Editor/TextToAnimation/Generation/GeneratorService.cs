@@ -65,7 +65,12 @@ public sealed class GeneratorService
 	void Set( ModelState state )
 	{
 		State = state;
-		StateChanged?.Invoke();
+		// a listener's failure (a closed window's widgets) must never fail the download or load that changed the state
+		foreach ( var listener in StateChanged?.GetInvocationList() ?? Array.Empty<Delegate>() )
+		{
+			try { ((Action)listener)(); }
+			catch ( Exception e ) { System.Diagnostics.Trace.TraceWarning( $"[text-to-animation] model state listener failed: {e.Message}" ); }
+		}
 	}
 
 	public async Task<bool> InstallAsync( IProgress<string> progress, CancellationToken token )
