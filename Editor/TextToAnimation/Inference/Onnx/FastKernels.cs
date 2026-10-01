@@ -49,7 +49,7 @@ public static unsafe class FastKernels
 		return new PackedMatrix { K = K, N = N, Panels = panels, Nr = nr, Data = data };
 	}
 
-	[ThreadStatic] static float[] _packedA, _acc, _biasPad, _scores;
+	[ThreadStatic] static float[] _packedA, _acc, _biasPad, _scores, _kt;
 
 	/// <summary>Micro-panels of A per parallel chunk (rows = MR x this); larger chunks stream B less often.</summary>
 	public static int ChunkBlocks = 8;
@@ -231,6 +231,16 @@ public static unsafe class FastKernels
 			maskH = hDim == 1 ? 0 : Sq * Sk;
 			maskN = nDim == 1 ? 0 : hDim * Sq * Sk;
 		}
+		if ( Fma.IsSupported && Avx.IsSupported )
+		{
+			Parallel.For( 0, N * Hq, ctx.Parallel, nh =>
+			{
+				var n = nh / Hq; var h = nh % Hq; var hk = h / groups;
+				AttentionHead( qf, kf, vf, mf, output, (n * Hq + h) * Sq * Dh, (n * Hk + hk) * Sk * Dh, (n * Hk + hk) * Sk * Dv,
+					(n * Hq + h) * Sq * Dv, n * maskN + h * maskH, Sq, Sk, Dh, Dv, scale );
+			} );
+			return Tensor.Float( new[] { N, Hq, Sq, Dv }, output );
+		}
 		Parallel.For( 0, N * Hq, ctx.Parallel, nh =>
 		{
 			var n = nh / Hq; var h = nh % Hq; var hk = h / groups;
@@ -270,6 +280,113 @@ public static unsafe class FastKernels
 			}
 		} );
 		return Tensor.Float( new[] { N, Hq, Sq, Dv }, output );
+	}
+
+	/// <summary>
+	/// One head of attention, blocked like a GEMM: K is transposed so keys run along the vector lanes, four query
+	/// rows share every K and V load, and the softmax exponentials are vectorised. Same arithmetic as the plain
+	/// loop (dot, scale, mask, max-shifted softmax, weighted sum of V); only the summation order differs.
+	/// </summary>
+	static void AttentionHead( float[] qf, float[] kf, float[] vf, float[] mf, float[] output, int qBase, int kBase, int vBase,
+		int oBase, int mBase, int Sq, int Sk, int Dh, int Dv, float scale )
+	{
+		var skPad = (Sk + 7) & ~7;
+		var kt = Scratch( ref _kt, Dh * skPad );
+		var sc = Scratch( ref _scores, 4 * skPad );
+		fixed ( float* q = qf, k = kf, v = vf, o = output, ktp = kt, s = sc )
+		{
+			for ( var d = 0; d < Dh; d++ )
+			{
+				var row = ktp + d * skPad;
+				for ( var j = 0; j < Sk; j++ ) row[j] = k[kBase + j * Dh + d];
+				for ( var j = Sk; j < skPad; j++ ) row[j] = 0f;
+			}
+			var vscale = Vector256.Create( scale );
+			var negInf = Vector256.Create( float.NegativeInfinity );
+			for ( var i0 = 0; i0 < Sq; i0 += 4 )
+			{
+				var rows = Math.Min( 4, Sq - i0 );
+				float* q0 = q + qBase + i0 * Dh;
+				float* q1 = rows > 1 ? q0 + Dh : q0, q2 = rows > 2 ? q0 + 2 * Dh : q0, q3 = rows > 3 ? q0 + 3 * Dh : q0;
+				// scores (rows x Sk): Q K^T * scale, eight keys per register, four rows per K load
+				for ( var j = 0; j < skPad; j += 8 )
+				{
+					Vector256<float> a0 = default, a1 = default, a2 = default, a3 = default;
+					var kp = ktp + j;
+					for ( var d = 0; d < Dh; d++, kp += skPad )
+					{
+						var kv = Avx.LoadVector256( kp );
+						a0 = Fma.MultiplyAdd( Vector256.Create( q0[d] ), kv, a0 );
+						a1 = Fma.MultiplyAdd( Vector256.Create( q1[d] ), kv, a1 );
+						a2 = Fma.MultiplyAdd( Vector256.Create( q2[d] ), kv, a2 );
+						a3 = Fma.MultiplyAdd( Vector256.Create( q3[d] ), kv, a3 );
+					}
+					Avx.Store( s + j, Avx.Multiply( a0, vscale ) );
+					Avx.Store( s + skPad + j, Avx.Multiply( a1, vscale ) );
+					Avx.Store( s + 2 * skPad + j, Avx.Multiply( a2, vscale ) );
+					Avx.Store( s + 3 * skPad + j, Avx.Multiply( a3, vscale ) );
+				}
+				// softmax per row (mask added, padding keys excluded)
+				for ( var r = 0; r < rows; r++ )
+				{
+					var sr = s + r * skPad;
+					if ( mf is not null )
+					{
+						var mrow = mBase + (i0 + r) * Sk;
+						for ( var j = 0; j < Sk; j++ ) sr[j] += mf[mrow + j];
+					}
+					for ( var j = Sk; j < skPad; j++ ) sr[j] = float.NegativeInfinity;
+					var max = float.NegativeInfinity;
+					for ( var j = 0; j < Sk; j++ ) if ( sr[j] > max ) max = sr[j];
+					if ( float.IsNegativeInfinity( max ) )
+					{
+						for ( var j = 0; j < skPad; j++ ) sr[j] = 0f; // every key masked: the plain loop's output is zero too
+						continue;
+					}
+					var vmax = Vector256.Create( max );
+					var vsum = Vector256<float>.Zero;
+					for ( var j = 0; j < skPad; j += 8 )
+					{
+						var x = Avx.LoadVector256( sr + j );
+						var e = Vector256.Exp( Avx.Subtract( x, vmax ) );
+						e = Avx.BlendVariable( e, Vector256<float>.Zero, Avx.CompareEqual( x, negInf ) );
+						Avx.Store( sr + j, e );
+						vsum = Avx.Add( vsum, e );
+					}
+					var sum = Vector256.Sum( vsum );
+					var inv = Vector256.Create( sum > 0 ? 1f / sum : 0f );
+					for ( var j = 0; j < skPad; j += 8 ) Avx.Store( sr + j, Avx.Multiply( Avx.LoadVector256( sr + j ), inv ) );
+				}
+				// output rows: P V, four rows per V load
+				float* p0 = s, p1 = s + skPad, p2 = s + 2 * skPad, p3 = s + 3 * skPad;
+				float* o0 = o + oBase + i0 * Dv;
+				var dv8 = Dv & ~7;
+				for ( var c = 0; c < dv8; c += 8 )
+				{
+					Vector256<float> a0 = default, a1 = default, a2 = default, a3 = default;
+					var vp = v + vBase + c;
+					for ( var j = 0; j < Sk; j++, vp += Dv )
+					{
+						var vv = Avx.LoadVector256( vp );
+						a0 = Fma.MultiplyAdd( Vector256.Create( p0[j] ), vv, a0 );
+						a1 = Fma.MultiplyAdd( Vector256.Create( p1[j] ), vv, a1 );
+						a2 = Fma.MultiplyAdd( Vector256.Create( p2[j] ), vv, a2 );
+						a3 = Fma.MultiplyAdd( Vector256.Create( p3[j] ), vv, a3 );
+					}
+					Avx.Store( o0 + c, a0 );
+					if ( rows > 1 ) Avx.Store( o0 + Dv + c, a1 );
+					if ( rows > 2 ) Avx.Store( o0 + 2 * Dv + c, a2 );
+					if ( rows > 3 ) Avx.Store( o0 + 3 * Dv + c, a3 );
+				}
+				for ( var c = dv8; c < Dv; c++ )
+					for ( var r = 0; r < rows; r++ )
+					{
+						var acc = 0f;
+						for ( var j = 0; j < Sk; j++ ) acc += s[r * skPad + j] * v[vBase + j * Dv + c];
+						o0[r * Dv + c] = acc;
+					}
+			}
+		}
 	}
 
 	[MethodImpl( MethodImplOptions.AggressiveInlining )]
@@ -637,7 +754,18 @@ public static unsafe class FastKernels
 		void Chunk( int c )
 		{
 			var end = Math.Min( src.Length, (c + 1) * 16384 );
-			for ( var i = c * 16384; i < end; i++ ) { var v = src[i]; r[i] = v / (1f + MathF.Exp( -v )); }
+			var i = c * 16384;
+			if ( Vector256.IsHardwareAccelerated )
+			{
+				var one = Vector256.Create( 1f );
+				fixed ( float* ps = src, pr = r )
+					for ( ; i + 8 <= end; i += 8 )
+					{
+						var v = Vector256.Load( ps + i );
+						Vector256.Store( v / (one + Vector256.Exp( -v )), pr + i );
+					}
+			}
+			for ( ; i < end; i++ ) { var v = src[i]; r[i] = v / (1f + MathF.Exp( -v )); }
 		}
 		var chunks = (src.Length + 16383) / 16384;
 		if ( chunks > 1 ) Parallel.For( 0, chunks, ctx.Parallel, Chunk ); else Chunk( 0 );
