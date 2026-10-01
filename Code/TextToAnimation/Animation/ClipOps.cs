@@ -344,8 +344,8 @@ public static class ClipOps
     {
         Up = rig.Up,
         RootIndex = rig.RootIndex,
-        HipsIndex = rig.HipsIndex,
-        HipsParentIsRoot = rig.Skeleton[rig.HipsIndex].ParentIndex == rig.RootIndex,
+        HipsIndex = rig.HipsIndex >= 0 ? rig.HipsIndex : rig.RootIndex,
+        HipsParentIsRoot = rig.Skeleton[rig.HipsIndex >= 0 ? rig.HipsIndex : rig.RootIndex].ParentIndex == rig.RootIndex,
     };
 
     static float WrapAngle(float a)

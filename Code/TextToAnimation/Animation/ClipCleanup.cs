@@ -68,7 +68,34 @@ public static class ClipCleanup
     public static List<XForm[]>? MirrorFrames(IReadOnlyList<XForm[]> frames, MotionRig rig, out string? error)
     {
         error = null;
-        try { return ClipMirror.Mirror(frames.ToList(), rig.Rig); }
+        if (rig.HasNamedRoles)
+        {
+            try { return ClipMirror.Mirror(frames.ToList(), rig.Rig); }
+            catch (ArgumentException) { /* names don't pair up: use the shape below */ }
+        }
+        return MirrorFramesByShape(frames, rig, out error);
+    }
+
+    /// <summary>Mirrors using left/right partners and the mirror plane found from the skeleton's shape (any bone names).</summary>
+    public static List<XForm[]>? MirrorFramesByShape(IReadOnlyList<XForm[]> frames, MotionRig rig, out string? error)
+    {
+        error = null;
+        try
+        {
+            var a = rig.Analysis;
+            if (!a.Symmetric)
+            {
+                error = "This skeleton has no left and right sides to swap, so it can't be mirrored.";
+                return null;
+            }
+            // locals mirror correctly only across a plane through the model's origin
+            if (MathF.Abs(a.MirrorOffset) > 0.01f * MathF.Max(a.Size, 1e-3f))
+            {
+                error = "This skeleton isn't centred on its mirror plane, so it can't be mirrored.";
+                return null;
+            }
+            return ClipMirror.Mirror(frames.ToList(), rig.Skeleton, a.MirrorNormal, a.MirrorAll);
+        }
         catch (ArgumentException ex) { error = ex.Message; return null; }
     }
 }

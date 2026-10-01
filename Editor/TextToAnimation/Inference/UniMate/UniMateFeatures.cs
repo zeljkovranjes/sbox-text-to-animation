@@ -24,6 +24,32 @@ public sealed class UniMateStats
 		StdLocal = new[] { .1735992, .4494819, .1803030, .3065769, .2421027, .3404175, .2567018, .2735683, .3518474, .01786926, .01843701, .02884578 },
 	};
 
+	/// <summary>The "truebones" family: animals and creatures (Truebones ZOO), from the v2 checkpoint's dataset_stats.npy.</summary>
+	public static UniMateStats Truebones { get; } = new()
+	{
+		MeanRoot = new[] { 0.0, 0.48069225491455897, 0.0, 0.903859583454801, 0.0, -0.014345269650504892, 0.0, 1.0, 0.0, -0.00014077468388700855, -0.000404235698352694, 0.004545269960350057 },
+		StdRoot = new[] { 1e-08, 0.5120161120918413, 1e-08, 0.34060428431706286, 1e-08, 0.2584971724031606, 1e-08, 1e-08, 1e-08, 0.010741314496406322, 0.022964643986454293, 0.038637982336550476 },
+		MeanLocal = new[] { 0.0034326478177160564, 0.4201169709789045, 0.17302418616708506, 0.931803532615029, -8.806489049812035e-05, -0.0013611709276153117, -0.0010395087357191405, 0.8737699146943557, 0.015044935017066588, -0.00011217976101921654, -0.00038734163543707083, 0.004444652326470307 },
+		StdLocal = new[] { 0.18108968845406656, 0.5458403371137666, 0.3594064892402845, 0.20210082777971936, 0.20512571015928063, 0.22095025346633343, 0.21187683541200106, 0.2430231804211249, 0.36379478545017124, 0.019208565156364925, 0.030045344004136665, 0.04252806832560322 },
+	};
+
+	/// <summary>The "objaverse" family: other rigged objects and characters, from the v2 checkpoint's dataset_stats.npy.</summary>
+	public static UniMateStats Objaverse { get; } = new()
+	{
+		MeanRoot = new[] { 0.0, 0.6201127556231308, 0.0, 0.9125788953879085, 0.0, 0.02000543143185833, 0.0, 1.0, 0.0, -5.151556896122859e-06, -0.0002666258097478285, 0.0010638856244688723 },
+		StdRoot = new[] { 1e-08, 0.20926810086490216, 1e-08, 0.2797461636510511, 1e-08, 0.297559450073977, 1e-08, 1e-08, 1e-08, 0.006560634281071742, 0.010966058516502264, 0.009710697991196067 },
+		MeanLocal = new[] { 0.00508068690387248, 0.665100225663909, 0.09798075323139123, 0.8866661588056203, -0.0006223255379864393, -0.00473312197030773, -0.0017531213071317981, 0.8647077970053488, 0.011217327098931291, -1.5249411222662456e-05, -0.00022626020801684053, 0.0011629571811297447 },
+		StdLocal = new[] { 0.22360356966103292, 0.38426552225471805, 0.23085540877950397, 0.2335058275779389, 0.2983238165839611, 0.26510047537141035, 0.30265997500502617, 0.24755531713729867, 0.3150632133772523, 0.019350011463484817, 0.024180478839908665, 0.029932337028051675 },
+	};
+
+	/// <summary>The statistics for a rig family (humanoid: Mixamo, animal: Truebones, object: Objaverse).</summary>
+	public static UniMateStats For( TextToAnimation.Generation.RigFamily family ) => family switch
+	{
+		TextToAnimation.Generation.RigFamily.Animal => Truebones,
+		TextToAnimation.Generation.RigFamily.Object => Objaverse,
+		_ => Mixamo,
+	};
+
 	public double Mean( int joint, int channel ) => joint == 0 ? MeanRoot[channel] : MeanLocal[channel];
 	public double Std( int joint, int channel ) => joint == 0 ? StdRoot[channel] : StdLocal[channel];
 
@@ -164,7 +190,7 @@ public static class UniMateFeatures
 				pos[t, j] = (s.M * worldPos[t, j] - s.Origin) * s.Scale;
 				W[t, j] = Quaternion.Normalize( mq * (worldRot[t, j] * UniMateMath.Inverse( s.RestWorldRot[j] )) * mqInv );
 			}
-		var f0 = FacingQuats( pos, s.RightHip, s.LeftHip, 0, 1 )[0];
+		var f0 = FacingQuats( pos, s, 0, 1 )[0];
 		var q = f0;
 		for ( var t = 0; t < T1; t++ )
 			for ( var j = 0; j < J; j++ )
@@ -185,7 +211,7 @@ public static class UniMateFeatures
 		for ( var t = 0; t < T1; t++ )
 			for ( var j = 0; j < J; j++ )
 				local[t, j] = j == 0 ? W[t, 0] : Quaternion.Normalize( UniMateMath.Inverse( W[t, s.Parents[j]] ) * W[t, j] );
-		var facing = FacingQuats( pos, s.RightHip, s.LeftHip, 0, T1 );
+		var facing = FacingQuats( pos, s, 0, T1 );
 		return (Features( pos, local, s.Parents, facing ), new Alignment { Q = q, Xz = xz, Ground = ground });
 	}
 
@@ -200,18 +226,17 @@ public static class UniMateFeatures
 		}
 	}
 
-	static Quaternion[] FacingQuats( Vector3[,] pos, int rh, int lh, int start, int count )
+	/// <summary>
+	/// Per-frame facing (get_root_facing_quat): from the right/left face joints, from head/tail for body-axis rigs,
+	/// or the identity for rigs without face joints (upstream's [-1, -1] sentinel).
+	/// </summary>
+	static Quaternion[] FacingQuats( Vector3[,] pos, UniMateSkeleton s, int start, int count )
 	{
 		var result = new Quaternion[count];
 		for ( var i = 0; i < count; i++ )
-		{
-			var t = start + i;
-			var across = pos[t, rh] - pos[t, lh];
-			across /= MathF.Max( across.Length(), 1e-8f );
-			var fwd = Vector3.Cross( Vector3.UnitY, across );
-			fwd /= MathF.Max( fwd.Length(), 1e-8f );
-			result[i] = UniMateMath.Between( fwd, Vector3.UnitZ );
-		}
+			result[i] = s.RightHip < 0 || s.LeftHip < 0
+				? Quaternion.Identity
+				: UniMateSkeleton.FacingFrom( pos[start + i, s.RightHip], pos[start + i, s.LeftHip], s.BodyAxis );
 		return result;
 	}
 

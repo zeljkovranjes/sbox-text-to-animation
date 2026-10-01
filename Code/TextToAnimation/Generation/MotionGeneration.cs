@@ -20,6 +20,21 @@ public enum GenerationMode
     Variation,
 }
 
+/// <summary>
+/// What kind of motion data a rig resembles, which picks the model's normalisation statistics. Auto
+/// decides from the skeleton's shape (two legs, two arms and a head: humanoid; legs, wings or a tail: animal).
+/// </summary>
+public enum RigFamily
+{
+    Auto,
+    /// <summary>People and humanoid characters (UniMate's Mixamo statistics).</summary>
+    Humanoid,
+    /// <summary>Animals and creatures: quadrupeds, birds, dinosaurs, reptiles, snakes (Truebones statistics).</summary>
+    Animal,
+    /// <summary>Anything else: robots, props, unusual rigs (Objaverse statistics).</summary>
+    Object,
+}
+
 /// <summary>A generation job. Frame data always uses the workspace skeleton (the generator converts internally).</summary>
 public sealed class GenerationRequest
 {
@@ -60,6 +75,9 @@ public sealed class GenerationRequest
 
     /// <summary>Sampling steps (quality vs speed). 0 = model default.</summary>
     public int Steps { get; init; }
+
+    /// <summary>Which kind of motion data the rig resembles (Auto = decided from the skeleton).</summary>
+    public RigFamily RigFamily { get; init; } = RigFamily.Auto;
 }
 
 /// <summary>Coarse progress for the UI.</summary>
@@ -97,6 +115,9 @@ public interface IMotionGenerator
 
     /// <summary>Checks a rig can be animated and returns problems (empty = fine).</summary>
     IReadOnlyList<string> Validate(MotionRig rig);
+
+    /// <summary>The family <see cref="RigFamily.Auto"/> resolves to for this rig (shown in the UI as the default).</summary>
+    RigFamily DetectFamily(MotionRig rig);
 
     /// <summary>Runs on a worker thread; must honour cancellation and never touch engine objects.</summary>
     Task<IReadOnlyList<GeneratedMotion>> GenerateAsync(MotionRig rig, GenerationRequest request,

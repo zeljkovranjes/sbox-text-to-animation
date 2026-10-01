@@ -11,7 +11,7 @@ namespace TextToAnimation.Animation;
 using Vector3 = System.Numerics.Vector3; // s&box compat (see Code/TextToAnimation/Assembly.cs)
 
 /// <summary>Coarse body region of a bone, used by the lock tools ("lock arms") and the generator masks.</summary>
-public enum BodyRegion { Root, Spine, Head, ArmL, ArmR, HandL, HandR, LegL, LegR, Other }
+public enum BodyRegion { Root, Spine, Head, ArmL, ArmR, HandL, HandR, LegL, LegR, Other, Tail }
 
 /// <summary>
 /// Everything the editor knows about one character skeleton: the bones (engine space - inches, Z-up,
@@ -55,6 +55,15 @@ public sealed class MotionRig
     public FootChain? LeftFoot { get; }
     public FootChain? RightFoot { get; }
 
+    /// <summary>Every leg that reaches the ground (two for a human or bird, four for a quadruped).</summary>
+    public IReadOnlyList<FootChain> Feet { get; }
+
+    /// <summary>The skeleton read from its shape alone (works for any armature and any bone names).</summary>
+    public RigAnalysis Analysis { get; }
+
+    /// <summary>True when the bone roles came from the bone names (a recognised humanoid rig).</summary>
+    public bool HasNamedRoles { get; }
+
     /// <summary>True when the mapping found a complete humanoid (hips, spine, legs, arms, head).</summary>
     public bool IsHumanoid { get; }
 
@@ -71,6 +80,41 @@ public sealed class MotionRig
         Map = map;
         UnitsPerCm = unitsPerCm;
         Problems = problems;
+        Analysis = RigAnalysis.Analyze(skeleton);
+
+        if (!IsRoleHumanoid(map) || !Analysis.IsHumanoid)
+        {
+            // any other armature (a creature, or a humanoid whose bone names aren't recognised): the shape decides
+            var a = Analysis;
+            HasNamedRoles = false;
+            problems.RemoveAll(p => p.StartsWith("Bone roles were only partly", StringComparison.Ordinal));
+            HipsIndex = a.InBody[a.BodyRoot] ? a.BodyRoot : -1;
+            var top = a.BodyRoot;
+            for (var p = skeleton[a.BodyRoot].ParentIndex; p >= 0; p = skeleton[p].ParentIndex)
+                if (a.InBody[p]) top = p;
+            RootIndex = top;
+            Up = a.Up;
+            Forward = a.Forward;
+            Lateral = a.Left;
+            HipHeight = Vector3.Dot(skeleton.RestWorld[a.BodyRoot].Pos, Up) - a.GroundHeight;
+            var feet = a.Limbs.Where(l => l.Kind is LimbKind.Leg or LimbKind.FrontLeg).Select(FootOf).Where(f => f is not null).Select(f => f!).ToList();
+            Feet = feet;
+            var (left, right) = a.MainLegs();
+            LeftFoot = left is null ? null : FootOf(left);
+            RightFoot = right is null ? null : FootOf(right);
+            IsHumanoid = a.IsHumanoid;
+            if (feet.Count == 0)
+                problems.Add("No legs reach the ground in the rest pose, so the foot tools (foot sliding, grounding, footsteps) are off.");
+            _regions = new BodyRegion[skeleton.Count];
+            _motionBones = new bool[skeleton.Count];
+            for (var i = 0; i < skeleton.Count; i++)
+            {
+                _regions[i] = RegionFromShape(i);
+                _motionBones[i] = a.InBody[i] && rig.ClassOf(i) == BoneClass.Animated;
+            }
+            return;
+        }
+        HasNamedRoles = true;
 
         HipsIndex = map.RoleToBone.TryGetValue(BoneRole.Hips, out var hips) ? hips : -1;
         RootIndex = HipsIndex >= 0 ? MotionRootOf(skeleton, rig, HipsIndex) : FirstRoot(skeleton);
@@ -98,11 +142,8 @@ public sealed class MotionRig
         LeftFoot = Chain(map, BoneRole.UpperLegL, BoneRole.LowerLegL, BoneRole.FootL, BoneRole.ToeL);
         RightFoot = Chain(map, BoneRole.UpperLegR, BoneRole.LowerLegR, BoneRole.FootR, BoneRole.ToeR);
 
-        IsHumanoid = HipsIndex >= 0 && LeftFoot is not null && RightFoot is not null
-            && map.RoleToBone.ContainsKey(BoneRole.Head)
-            && map.RoleToBone.ContainsKey(BoneRole.UpperArmL) && map.RoleToBone.ContainsKey(BoneRole.UpperArmR);
-        if (!IsHumanoid)
-            problems.Add("This skeleton is not a complete humanoid (hips, legs, arms and head). Generation and foot tools may be limited.");
+        IsHumanoid = true;
+        Feet = new[] { LeftFoot!, RightFoot! };
 
         _regions = new BodyRegion[skeleton.Count];
         _motionBones = new bool[skeleton.Count];
@@ -125,6 +166,50 @@ public sealed class MotionRig
         return new MotionRig(skeleton, rig, map, unitsPerCm, problems);
     }
 
+    /// <summary>A complete humanoid found from the bone names (hips, both legs, both arms, head).</summary>
+    static bool IsRoleHumanoid(MappingResult map)
+    {
+        var r = map.RoleToBone;
+        return r.ContainsKey(BoneRole.Hips) && r.ContainsKey(BoneRole.Head)
+            && r.ContainsKey(BoneRole.UpperLegL) && r.ContainsKey(BoneRole.LowerLegL) && r.ContainsKey(BoneRole.FootL)
+            && r.ContainsKey(BoneRole.UpperLegR) && r.ContainsKey(BoneRole.LowerLegR) && r.ContainsKey(BoneRole.FootR)
+            && r.ContainsKey(BoneRole.UpperArmL) && r.ContainsKey(BoneRole.UpperArmR);
+    }
+
+    /// <summary>A leg chain as a foot chain (upper leg, knee, ankle, toe); null when it is too short.</summary>
+    static FootChain? FootOf(RigLimb limb)
+    {
+        var c = limb.Chain;
+        if (c.Count < 3) return null;
+        var hasToe = c.Count >= 4;
+        var start = hasToe ? c.Count - 4 : c.Count - 3;
+        return new FootChain { Hip = c[start], Knee = c[start + 1], Ankle = c[start + 2], Toe = hasToe ? c[start + 3] : null };
+    }
+
+    BodyRegion RegionFromShape(int bone)
+    {
+        var a = Analysis;
+        var left = a.Side[bone] == BoneSide.Left;
+        return a.Part[bone] switch
+        {
+            RigPart.Root or RigPart.Hips => BodyRegion.Root,
+            RigPart.Spine or RigPart.Neck => BodyRegion.Spine,
+            RigPart.Head or RigPart.HeadPart => BodyRegion.Head,
+            RigPart.Tail or RigPart.Fin => BodyRegion.Tail,
+            RigPart.Arm or RigPart.Wing or RigPart.FrontLeg => left ? BodyRegion.ArmL : BodyRegion.ArmR,
+            RigPart.Leg => left ? BodyRegion.LegL : BodyRegion.LegR,
+            RigPart.Digit => DigitRegion(bone, left),
+            _ => BodyRegion.Other,
+        };
+    }
+
+    BodyRegion DigitRegion(int bone, bool left)
+    {
+        var limb = Analysis.Limbs.FirstOrDefault(l => l.Digits.Contains(bone));
+        if (limb?.Kind == LimbKind.Leg) return left ? BodyRegion.LegL : BodyRegion.LegR;
+        return left ? BodyRegion.HandL : BodyRegion.HandR;
+    }
+
     /// <summary>Body region of a bone (inherited from the nearest mapped ancestor).</summary>
     public BodyRegion RegionOf(int bone) => _regions[bone];
 
@@ -134,7 +219,26 @@ public sealed class MotionRig
     /// </summary>
     public bool IsMotionBone(int bone) => _motionBones[bone];
 
-    public int? Bone(BoneRole role) => Map.RoleToBone.TryGetValue(role, out var b) ? b : null;
+    /// <summary>
+    /// The bone with a humanoid role. For rigs read from their shape, roles come from the shape's labels (and only
+    /// for humanoids): bone names that look like roles aren't trusted on a creature.
+    /// </summary>
+    public int? Bone(BoneRole role)
+    {
+        if (HasNamedRoles) return Map.RoleToBone.TryGetValue(role, out var b) ? b : null;
+        if (!Analysis.IsHumanoid || !ShapeRoleLabels.TryGetValue(role, out var label)) return null;
+        var bone = Array.IndexOf(Analysis.Label, label);
+        return bone >= 0 && Analysis.InBody[bone] ? bone : null;
+    }
+
+    static readonly Dictionary<BoneRole, string> ShapeRoleLabels = new()
+    {
+        [BoneRole.Hips] = "Hips", [BoneRole.Neck] = "Neck", [BoneRole.Head] = "Head",
+        [BoneRole.ClavicleL] = "Left Shoulder", [BoneRole.UpperArmL] = "Left Upper Arm", [BoneRole.LowerArmL] = "Left Forearm", [BoneRole.HandL] = "Left Hand",
+        [BoneRole.ClavicleR] = "Right Shoulder", [BoneRole.UpperArmR] = "Right Upper Arm", [BoneRole.LowerArmR] = "Right Forearm", [BoneRole.HandR] = "Right Hand",
+        [BoneRole.UpperLegL] = "Left Thigh", [BoneRole.LowerLegL] = "Left Shin", [BoneRole.FootL] = "Left Foot", [BoneRole.ToeL] = "Left Toe",
+        [BoneRole.UpperLegR] = "Right Thigh", [BoneRole.LowerLegR] = "Right Shin", [BoneRole.FootR] = "Right Foot", [BoneRole.ToeR] = "Right Toe",
+    };
 
     /// <summary>All bones in the subtree under <paramref name="bone"/>, including it.</summary>
     public IEnumerable<int> Descendants(int bone)

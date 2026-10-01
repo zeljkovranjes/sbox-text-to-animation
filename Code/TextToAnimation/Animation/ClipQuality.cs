@@ -40,7 +40,7 @@ public static class ClipQuality
         if (CheckFinite(frames, rig, issues)) return issues;
         CheckContinuity(frames, rig, clip.Fps, issues);
         CheckBoneLengths(frames, rig, issues);
-        if (rig.IsHumanoid)
+        if (rig.HipsIndex >= 0 && rig.LeftFoot is not null && rig.RightFoot is not null)
         {
             CheckScaleAndAxes(frames, rig, issues);
             CheckFeet(frames, rig, clip.Fps, issues);

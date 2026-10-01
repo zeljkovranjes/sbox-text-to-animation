@@ -32,8 +32,25 @@ public sealed class UniMateSkeleton
 	public Quaternion MQuat { get; private init; }
 	public Vector3 Origin { get; private init; }
 	public float Scale { get; private init; }
+	/// <summary>Face joints (BFS indices): the right/left pair, or head/tail when <see cref="BodyAxis"/>; -1 = no facing (identity).</summary>
 	public int RightHip { get; private init; } = -1;
 	public int LeftHip { get; private init; } = -1;
+	/// <summary>The face joints are the head and tail ends of a body without left/right (a snake): forward is head - tail.</summary>
+	public bool BodyAxis { get; private init; }
+
+	/// <summary>UniMate's facing from the face joints at one frame (canonical Y-up positions): rotation taking forward to +Z.</summary>
+	public static Quaternion FacingFrom( Vector3 right, Vector3 left, bool bodyAxis )
+	{
+		var across = right - left;
+		across /= MathF.Max( across.Length(), 1e-8f );
+		var fwd = Vector3.Cross( Vector3.UnitY, across );
+		fwd /= MathF.Max( fwd.Length(), 1e-8f );
+		if ( bodyAxis ) fwd = Vector3.Transform( fwd, BodyAxisCorrection );
+		return UniMateMath.Between( fwd, Vector3.UnitZ );
+	}
+
+	/// <summary>Upstream's -90° rotation about Y that turns a body-axis "across" into the forward direction.</summary>
+	static readonly Quaternion BodyAxisCorrection = Quaternion.CreateFromAxisAngle( Vector3.UnitY, -MathF.PI / 2f );
 
 	public long[,] Relations { get; private init; }
 	public long[,] GraphDist { get; private init; }
@@ -51,7 +68,7 @@ public sealed class UniMateSkeleton
 	/// </summary>
 	public static UniMateSkeleton Build( IReadOnlyList<string> cleanNames, IReadOnlyList<int> parents,
 		IReadOnlyList<Vector3> restWorldPos, IReadOnlyList<Quaternion> restWorldRot,
-		int rightHip, int leftHip, Vector3 forward, M3 upBasis, float targetDiameter = 2f )
+		int rightHip, int leftHip, Vector3 forward, M3 upBasis, float targetDiameter = 2f, bool bodyAxis = false )
 	{
 		var n = parents.Count;
 		if ( n < 5 ) throw new ArgumentException( "UniMate needs at least 5 joints." );
@@ -69,7 +86,12 @@ public sealed class UniMateSkeleton
 		// facing in the up-aligned frame
 		var p = pos.Select( v => upBasis * v ).ToArray();
 		Vector3 fwd;
-		if ( rh >= 0 && lh >= 0 )
+		if ( rh >= 0 && lh >= 0 && bodyAxis )
+		{
+			var across = Vector3.Normalize( p[rh] - p[lh] );
+			fwd = Vector3.Transform( Vector3.Cross( Vector3.UnitY, across ), BodyAxisCorrection );
+		}
+		else if ( rh >= 0 && lh >= 0 )
 		{
 			var across = Vector3.Normalize( p[rh] - p[lh] );
 			fwd = Vector3.Cross( Vector3.UnitY, across );
@@ -106,6 +128,7 @@ public sealed class UniMateSkeleton
 			Scale = scale,
 			RightHip = rh,
 			LeftHip = lh,
+			BodyAxis = bodyAxis && rh >= 0 && lh >= 0,
 			Relations = rel,
 			GraphDist = dist,
 			Depths = JointDepths( newParents ),
