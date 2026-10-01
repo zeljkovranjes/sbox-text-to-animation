@@ -9,7 +9,7 @@ Text-to-animation and animation editing for the [s&box](https://sbox.game) edito
 
 Open **View → Text to Animation**, or right-click a model and choose **Animate with Text to Animation**.
 
-1. Choose a humanoid model.
+1. Choose or drop a humanoid VMDL, or start fresh with **New from Citizen** / **New from Citizen Human** (copies that VMDL into your project).
 2. Click **Download** on the Generate tab (769 MB, once).
 3. Describe the motion and click **Generate**.
 4. Refine it on the Edit and Pose tabs, then click **Save to VMDL**.

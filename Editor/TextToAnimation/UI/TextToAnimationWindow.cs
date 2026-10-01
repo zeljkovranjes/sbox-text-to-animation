@@ -41,7 +41,10 @@ public sealed class TextToAnimationWindow : Widget
 	Widget _viewHost;
 	public AnimationViewport Viewport { get; private set; }
 	ProcessingIndicator _indicator;
-	TaDropZone _pickModel;
+	Widget _main;
+	StartPage _start;
+	ProcessingIndicator _firstLoad;
+	string _starting;
 	TimelineWidget _timeline;
 	IconButton _play, _loop;
 	Label _time;
@@ -70,6 +73,12 @@ public sealed class TextToAnimationWindow : Widget
 		Layout = Layout.Column();
 		Layout.Margin = 10;
 		Layout.Spacing = 8;
+		// the first page (the Weapon Importer's): drop area + loader, until a model is open
+		_start = Layout.Add( new StartPage( this, paths => _ = OpenModelPathAsync( paths[0] ), PickModel, ChooseFromDisk,
+			() => _ = NewFromStarterAsync( StarterModels.Citizen ), () => _ = NewFromStarterAsync( StarterModels.CitizenHuman ) ), 1 );
+		_firstLoad = Layout.Add( new ProcessingIndicator( this ) { Visible = false }, 1 );
+		_main = Layout.Add( new Widget( this ) { Layout = Layout.Column(), Visible = false }, 1 );
+		_main.Layout.Spacing = 8;
 		BuildTopBar();
 		BuildBody();
 		BuildStatus();
@@ -144,10 +153,10 @@ public sealed class TextToAnimationWindow : Widget
 
 	void BuildTopBar()
 	{
-		var bar = Layout.AddRow();
+		var bar = _main.Layout.AddRow();
 		bar.Spacing = 8;
 		_modelButton = bar.Add( new Button( "Choose model…", "view_in_ar" ) { FixedHeight = 30, MinimumWidth = 200, ToolTip = "The model (.vmdl) whose animations you're working on" } );
-		_modelButton.Clicked = PickModel;
+		_modelButton.Clicked = ShowModelMenu;
 		_modelPath = bar.Add( TaStyle.Muted( new Label( "", this ) { FixedHeight = 30 }, small: true ), 1 );
 		_undo = bar.Add( TaStyle.Icon( this, "undo", Session.UndoEdit, "Undo (Ctrl+Z)", 30 ) );
 		_redo = bar.Add( TaStyle.Icon( this, "redo", Session.RedoEdit, "Redo (Ctrl+Y)", 30 ) );
@@ -164,7 +173,7 @@ public sealed class TextToAnimationWindow : Widget
 
 	void BuildBody()
 	{
-		var body = Layout.AddRow( 1 );
+		var body = _main.Layout.AddRow( 1 );
 		body.Spacing = 8;
 
 		_clips = body.Add( new ClipListPanel( this, Session ) { FixedWidth = 250 } );
@@ -192,9 +201,6 @@ public sealed class TextToAnimationWindow : Widget
 		Viewport = _viewHost.Layout.Add( new AnimationViewport( _viewHost, Session ), 1 );
 		_indicator = _viewHost.Layout.Add( new ProcessingIndicator( _viewHost ), 1 );
 		_indicator.Visible = false;
-		_pickModel = _viewHost.Layout.Add( new TaDropZone( _viewHost, "Choose a model to animate",
-			"Pick any .vmdl from your project (or drag one here). Its animations open in the list on the left; new ones are generated with UniMate and saved back into it.",
-			"Choose Model…", "view_in_ar", TaDrop.ModelExtensions, paths => _ = OpenModelPathAsync( paths[0] ), PickModel ), 1 );
 
 		// timeline + transport
 		var timelineCard = center.Add( new TaCard( this ) { FixedHeight = 132 } );
@@ -260,6 +266,17 @@ public sealed class TextToAnimationWindow : Widget
 
 	// ------------------------------------------------------------------ actions
 
+	void ShowModelMenu()
+	{
+		var menu = new Menu( this );
+		menu.AddOption( "Choose VMDL…", "folder_open", PickModel );
+		menu.AddOption( "From disk…", "file_open", ChooseFromDisk );
+		menu.AddSeparator();
+		menu.AddOption( "New from Citizen…", "person_add", () => _ = NewFromStarterAsync( StarterModels.Citizen ) );
+		menu.AddOption( "New from Citizen Human…", "person_add", () => _ = NewFromStarterAsync( StarterModels.CitizenHuman ) );
+		menu.OpenAtCursor();
+	}
+
 	void PickModel()
 	{
 		var picker = AssetPicker.Create( this, AssetType.Model );
@@ -270,9 +287,80 @@ public sealed class TextToAnimationWindow : Widget
 
 	async Task OpenModelPathAsync( string path )
 	{
+		if ( !StarterModels.IsInProject( path ) && AssetSystem.FindByPath( path ) is null )
+		{
+			await ImportOutsideModelAsync( path );
+			return;
+		}
 		var asset = AssetSystem.FindByPath( path );
 		if ( asset is null ) { SetStatus( $"{Path.GetFileName( path )} isn't a model in this project.", Tone.Red ); return; }
 		await OpenModelAsync( asset );
+	}
+
+	/// <summary>Picks a .vmdl anywhere on disk; files outside the project are copied in first.</summary>
+	void ChooseFromDisk()
+	{
+		var path = EditorUtility.OpenFileDialog( "Open model", "Models (*.vmdl)", null );
+		if ( !string.IsNullOrEmpty( path ) ) _ = OpenModelPathAsync( path );
+	}
+
+	async Task ImportOutsideModelAsync( string path )
+	{
+		await RunStartingAsync( $"Copying {Path.GetFileName( path )} into the project", async () =>
+		{
+			var result = await StarterModels.CopyIntoProjectAsync( path );
+			await EngineThread.SwitchToMainThread();
+			return result;
+		} );
+	}
+
+	/// <summary>Start fresh: copies a stock character's .vmdl into the project, compiles it and opens it.</summary>
+	async Task NewFromStarterAsync( StarterModel starter )
+	{
+		if ( StarterModels.AssetsRoot is null ) { SetStatus( "Open a project first.", Tone.Red ); return; }
+		var suggested = StarterModels.DefaultTarget( starter.Title.Replace( ' ', '_' ) );
+		var target = EditorUtility.SaveFileDialog( $"New model from {starter.Title}", "vmdl", suggested );
+		if ( string.IsNullOrEmpty( target ) ) return;
+		if ( !target.EndsWith( ".vmdl", StringComparison.OrdinalIgnoreCase ) ) target += ".vmdl";
+		await CreateFromStarterAsync( starter, target );
+	}
+
+	/// <summary>Copies <paramref name="starter"/> to <paramref name="target"/>, compiles and opens it.</summary>
+	public async Task CreateFromStarterAsync( StarterModel starter, string target )
+	{
+		if ( !StarterModels.IsInProject( target ) ) { SetStatus( "Save the new model inside this project's Assets folder.", Tone.Red ); return; }
+		await RunStartingAsync( $"Creating {Path.GetFileName( target )} from {starter.Title}", () => StarterModels.CreateFromStarterAsync( starter, target ) );
+	}
+
+	/// <summary>True while the first page (no model open) is showing.</summary>
+	public bool ShowsStartPage => _start.Visible;
+
+	/// <summary>Shows the first-load indicator while a model is copied and compiled, then opens it.</summary>
+	async Task RunStartingAsync( string message, Func<Task<VmdlCompiler.CompileResult>> work )
+	{
+		if ( _starting is not null || Session.Busy ) return;
+		_starting = message;
+		_firstLoad.SetMessage( message + "…" );
+		RefreshAll();
+		try
+		{
+			var result = await work();
+			await EngineThread.SwitchToMainThread();
+			if ( !result.Compiled || result.Asset is null ) { SetStatus( result.Error ?? "The model did not compile.", Tone.Red ); return; }
+			_firstLoad.SetMessage( $"Opening {result.Asset.Name}…" );
+			await OpenModelAsync( result.Asset );
+		}
+		catch ( Exception e )
+		{
+			await EngineThread.SwitchToMainThread();
+			SetStatus( e.Message, Tone.Red );
+		}
+		finally
+		{
+			await EngineThread.SwitchToMainThread();
+			_starting = null;
+			RefreshAll();
+		}
 	}
 
 	public async Task OpenModelAsync( Asset asset )
@@ -397,6 +485,7 @@ public sealed class TextToAnimationWindow : Widget
 	{
 		if ( !this.IsValid() ) return;
 		_indicator?.Tick();
+		if ( _firstLoad?.Visible == true ) _firstLoad.Tick();
 		if ( Session.Playing ) RefreshTransport();
 	}
 
@@ -431,7 +520,11 @@ public sealed class TextToAnimationWindow : Widget
 		if ( showIndicator && _lastProgress.Length == 0 ) _indicator.SetMessage( Session.BusyText + "…" );
 		if ( !busy ) _lastProgress = "";
 		Viewport.Visible = hasModel && !showIndicator;
-		_pickModel.Visible = !hasModel && !showIndicator;
+		var starting = _starting is not null || (!hasModel && busy);
+		_main.Visible = hasModel;
+		_start.Visible = !hasModel && !starting;
+		_firstLoad.Visible = !hasModel && starting;
+		_firstLoad.Busy = _firstLoad.Visible;
 		_cancel.Visible = Flow.Running;
 
 		_clipTitle.Text = clip?.Name ?? (hasModel ? "No animation open" : "");

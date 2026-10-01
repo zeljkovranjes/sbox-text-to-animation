@@ -108,20 +108,26 @@ public static class EditorGate
 		var checks = new Dictionary<string, bool>();
 		void Check( string name, bool ok, string detail = "" ) { checks[name] = ok; Set( "checks", checks ); Note( $"{(ok ? "PASS" : "FAIL")} {name} {detail}" ); }
 
-		// ---- 1. a test model in the project: inherits the s&box human, so it has its skeleton, mesh and animations
-		var folder = Path.Combine( assets, "t2a_gate" );
-		Directory.CreateDirectory( folder );
-		var vmdlPath = Path.Combine( folder, "gate_human.vmdl" );
-		File.WriteAllText( vmdlPath, VmdlWriter.GenerateStandalone( "models/citizen_human/citizen_human_male.vmdl", Array.Empty<AnimEntry>(), 1f, "pelvis" ) );
-		var compile = await VmdlCompiler.RegisterAndCompileAsync( vmdlPath, Array.Empty<string>() );
-		Check( "test model compiles", compile.Compiled, compile.Error ?? "" );
-		if ( !compile.Compiled ) return false;
-		var asset = compile.Asset;
-
-		// ---- 2. open the editor window and the model
+		// ---- 1. the first page, then "New from Citizen Human": a copy of the stock .vmdl in the project
 		await EngineThread.SwitchToMainThread();
 		var window = TextToAnimationWindow.Open();
-		await window.OpenModelAsync( asset );
+		await EngineThread.DelayOnMain( 300 );
+		Check( "start page shows first", window.ShowsStartPage && !window.Session.HasModel );
+		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" ) await EngineThread.DelayOnMain( 5000 );
+		var folder = Path.Combine( assets, "t2a_gate" );
+		var vmdlPath = Path.Combine( folder, "gate_human.vmdl" );
+		var started = Stopwatch.StartNew();
+		await window.CreateFromStarterAsync( StarterModels.CitizenHuman, vmdlPath );
+		await EngineThread.SwitchToMainThread();
+		Note( $"new model from Citizen Human in {started.Elapsed.TotalSeconds:0.0} s" );
+		var copied = File.Exists( vmdlPath ) && File.ReadAllText( vmdlPath ) == StarterModels.SourceText( StarterModels.CitizenHuman );
+		Check( "new from Citizen Human copies the vmdl", copied );
+		var asset = AssetSystem.FindByPath( vmdlPath );
+		Check( "test model compiles", asset is not null && asset.IsCompiled && window.Session.HasModel, window.Session.ModelAsset?.Path ?? "" );
+		if ( !window.Session.HasModel ) return false;
+		Check( "start page hides once a model is open", !window.ShowsStartPage );
+
+		// ---- 2. the opened model
 		var session = window.Session;
 		Check( "model opens", session.HasModel );
 		Check( "humanoid recognised", session.Rig?.IsHumanoid == true, string.Join( "; ", session.Rig?.Problems ?? new List<string>() ) );
@@ -228,6 +234,16 @@ public static class EditorGate
 		// ---- 12. backups exist
 		var backups = Path.Combine( root, "text_to_animation", "backups" );
 		Check( "backups kept", Directory.Exists( backups ) && Directory.GetFiles( backups ).Length > 0 );
+
+		// ---- 12b. "New from Citizen" (the stylised character) also copies, compiles and opens as a humanoid
+		var citizenPath = Path.Combine( folder, "gate_citizen.vmdl" );
+		var citizen = await StarterModels.CreateFromStarterAsync( StarterModels.Citizen, citizenPath );
+		await EngineThread.SwitchToMainThread();
+		var citizenSession = new EditorSession();
+		var citizenError = citizen.Compiled ? await citizenSession.OpenModelAsync( citizen.Asset ) : citizen.Error;
+		await EngineThread.SwitchToMainThread();
+		Check( "new from Citizen compiles and opens", citizenError is null && citizenSession.Rig?.IsHumanoid == true && citizenSession.Sequences.Count > 10,
+			citizenError ?? $"{citizenSession.Sequences.Count} sequences" );
 
 		// ---- 13. posing: a key on one bone moves it to the requested pose, undo removes it
 		session.SelectClip( imported );
