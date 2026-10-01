@@ -46,7 +46,7 @@ public sealed class GenerationFlow
 			var progress = new EngineThread.MainThreadProgress<string>( Report );
 			var ok = await Service.InstallAsync( progress, _cts.Token );
 			await EngineThread.SwitchToMainThread();
-			_session.SetStatus( ok ? "UniMate is installed - describe an animation and press Generate." : $"Download failed: {Service.LastError}", ok ? UI.Tone.Accent : UI.Tone.Red );
+			_session.SetStatus( ok ? "UniMate is installed. Describe an animation and press Enter." : $"Download failed: {Service.LastError}", ok ? UI.Tone.Accent : UI.Tone.Red );
 			return ok;
 		}
 		catch ( OperationCanceledException )

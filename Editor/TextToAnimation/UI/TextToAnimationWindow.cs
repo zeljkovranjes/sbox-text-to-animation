@@ -246,7 +246,8 @@ public sealed class TextToAnimationWindow : Widget
 		_time = transport.Add( TaStyle.Muted( new Label( "", timelineCard ) ), 1 );
 		_rangeBar = transport.Add( new RangeBar( timelineCard, Session ) );
 		transport.AddStretchCell();
-		transport.Add( TaStyle.Icon( timelineCard, "help_outline", () => { }, "Timeline: drag across the lanes, or click one point and Shift+click another, to highlight frames - then keep, delete, repeat or reverse them with the bar that appears. Drag the highlight edges to adjust; I/O set them at the playhead. Right click to split or trim at a frame. Double click the Pinned lane to pin a pose." ) );
+		Widget help = null;
+		help = transport.Add( TaStyle.Icon( timelineCard, "help_outline", () => ShowHelp( help ), "Timeline gestures and keyboard shortcuts" ) );
 		_timeline = timelineCard.Layout.Add( new TimelineWidget( timelineCard, Session ) { FixedHeight = 84 } );
 		_timeline.BuildContextMenu = BuildTimelineMenu;
 		_quickStart = timelineCard.Layout.Add( new QuickStart( timelineCard, Session ) { FixedHeight = 84 + 30 } );
@@ -261,7 +262,7 @@ public sealed class TextToAnimationWindow : Widget
 		var side = body.AddColumn();
 		side.Spacing = 8;
 		_sideTabs = side.Add( new TaTabBar( this, 32 ) { FixedWidth = 380, Stretch = true } );
-		_sideTabs.Add( "Edit", "content_cut", "Trim, speed, loop, root motion, clean up" );
+		_sideTabs.Add( "Edit", "tune", "Speed, frame rate, root motion, looping, clean up and the quality check (cutting is on the timeline)" );
 		_sideTabs.Add( "Pose", "accessibility_new", "Select bones, pose them, lock them" );
 		_sideTabs.Add( "Export", "save", "How the animation is saved into the model" );
 		_sideTabs.SelectedChanged = ShowTab;
@@ -334,6 +335,14 @@ public sealed class TextToAnimationWindow : Widget
 	}
 
 	// ------------------------------------------------------------------ model
+
+	/// <summary>The help card (timeline gestures and keyboard shortcuts).</summary>
+	public void ShowHelp( Widget anchor = null )
+	{
+		var popup = new HelpPopup( this );
+		if ( anchor is not null ) popup.OpenAbove( anchor );
+		else popup.OpenAt( global::Editor.Application.CursorPosition, animateOffset: new Vector2( 0, 8 ) );
+	}
 
 	void ShowModelMenu()
 	{
@@ -525,6 +534,8 @@ public sealed class TextToAnimationWindow : Widget
 		menu.AddSeparator();
 		menu.AddOption( "Replace existing in model…", "swap_horiz", ReplaceExisting ).Enabled = clip is not null;
 		menu.AddOption( "Export .dmx…", "file_download", ExportClip ).Enabled = clip is not null;
+		menu.AddSeparator();
+		menu.AddOption( "Shortcuts and help (F1)", "help_outline", () => ShowHelp() );
 		menu.OpenAtCursor();
 	}
 
@@ -643,6 +654,7 @@ public sealed class TextToAnimationWindow : Widget
 			case KeyCode.P when editor: _timeline.TogglePin( Session.CurrentFrame ); break;
 			case KeyCode.I when editor: _timeline.SetInOut( Session.CurrentFrame, true ); break;
 			case KeyCode.O when editor: _timeline.SetInOut( Session.CurrentFrame, false ); break;
+			case KeyCode.F1: ShowHelp(); break;
 			case KeyCode.Escape: Session.SelectBone( null ); Session.SetRange( null, null ); break;
 			default: handled = false; break;
 		}

@@ -219,6 +219,11 @@ public static class EditorGate
 			await EngineThread.DelayOnMain( 300 );
 			Check( "the history popup opens", popup.IsValid() && popup.Visible );
 			popup.Close();
+			var help = new UI.HelpPopup( window );
+			help.OpenAbove( composer );
+			await EngineThread.DelayOnMain( 300 );
+			Check( "the help card opens with every shortcut", help.IsValid() && help.Visible && UI.HelpPopup.Keys.Length >= 12, $"{UI.HelpPopup.Keys.Length} shortcuts" );
+			help.Close();
 			if ( generated is not null )
 			{
 				var issues = ClipQuality.Analyze( generated, session.Rig );
@@ -415,6 +420,12 @@ public static class EditorGate
 			Note( "showcase prompt history" );
 			await EngineThread.DelayOnMain( 4000 );
 			shown.Close();
+			var helpShown = new UI.HelpPopup( window );
+			helpShown.OpenAt( window.EditPrompt.ScreenRect.TopLeft + new Vector2( 300, -helpShown.Height - 8 ), animate: false );
+			helpShown.WindowTitle = "Text to Animation - Help";
+			Note( "showcase help" );
+			await EngineThread.DelayOnMain( 8000 );
+			helpShown.Close();
 		}
 
 		return checks.Values.All( v => v );
