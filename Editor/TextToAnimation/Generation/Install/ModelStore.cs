@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace TextToAnimation.Editor.Inference.Install;
+namespace TextToAnimation.Editor.Generation.Install;
 
 /// <summary>Install state of a model package, as shown on the setup page.</summary>
 public enum ModelState

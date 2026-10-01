@@ -11,7 +11,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 
-namespace TextToAnimation.Editor.Inference.Install;
+namespace TextToAnimation.Editor.Generation.Install;
 
 /// <summary>Progress of an install, for the progress bar and its caption.</summary>
 public readonly record struct InstallProgress( long BytesDone, long BytesTotal, string CurrentFile, double BytesPerSecond, string Phase )
