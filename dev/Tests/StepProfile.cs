@@ -35,6 +35,15 @@ public class StepProfile
             ["caption_emb"] = Tensor.Float(new[] { 2, 768 }),
         };
         step.Run(feed);
+        foreach (var blocks in new[] { 2, 4, 8, 16 })
+        {
+            FastKernels.ChunkBlocks = blocks;
+            step.Run(feed);
+            var t0 = System.Diagnostics.Stopwatch.StartNew();
+            for (var r = 0; r < 3; r++) step.Run(feed);
+            _out.WriteLine($"chunk blocks {blocks}: {t0.ElapsedMilliseconds / 3} ms");
+        }
+        FastKernels.ChunkBlocks = 8;
         step.Profile = new Dictionary<string, double>();
         var alloc0 = GC.GetTotalAllocatedBytes(true);
         var gc0 = GC.CollectionCount(0); var gc2 = GC.CollectionCount(2);

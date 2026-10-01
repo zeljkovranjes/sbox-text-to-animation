@@ -51,6 +51,9 @@ public static unsafe class FastKernels
 
 	[ThreadStatic] static float[] _packedA, _acc, _biasPad, _scores;
 
+	/// <summary>Micro-panels of A per parallel chunk (rows = MR x this); larger chunks stream B less often.</summary>
+	public static int ChunkBlocks = 8;
+
 	/// <summary>A per-thread scratch buffer of at least <paramref name="n"/> floats (contents undefined).</summary>
 	static float[] Scratch( ref float[] slot, int n )
 	{
@@ -62,7 +65,7 @@ public static unsafe class FastKernels
 	public static void Gemm( float[] a, int aOffset, int M, PackedMatrix b, float[] c, int cOffset, ExecContext ctx, float[] bias = null )
 	{
 		var K = b.K; var N = b.N; var mr = MR; var nr = b.Nr;
-		var chunkRows = mr * 4;
+		var chunkRows = mr * ChunkBlocks;
 		var chunks = (M + chunkRows - 1) / chunkRows;
 		var fma = Fma.IsSupported && Avx.IsSupported;
 		void Chunk( int ci )

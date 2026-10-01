@@ -39,11 +39,8 @@ public class SolverStudy
                 var line = $"seed {seed} {name,-22} calls {calls,3}  rms {Rms(x):0.0000}  {w.ElapsedMilliseconds} ms";
                 _out.WriteLine(line); results.Add(line);
             }
-            foreach (var shift in new[] { 0.5f, 0.7f, 0.85f })
-                foreach (var n in new[] { 8, 12, 16 })
-                    Try($"ab2 {n} shift {shift}", new SampleSettings { Steps = n, Guidance = 3f, Method = Integrator.AdamsBashforth2, TimeShift = shift }, n);
-            Try("euler 40", new SampleSettings { Steps = 40, Guidance = 3f }, 40);
-            Try("ab2 24", new SampleSettings { Steps = 24, Guidance = 3f, Method = Integrator.AdamsBashforth2 }, 24);
+            Try("ab2 16 s.5", new SampleSettings { Steps = 16, Guidance = 3f, Method = Integrator.AdamsBashforth2, TimeShift = 0.5f }, 16);
+            Try("ab2 8 s.5", new SampleSettings { Steps = 8, Guidance = 3f, Method = Integrator.AdamsBashforth2, TimeShift = 0.5f }, 8);
         }
     }
 }
