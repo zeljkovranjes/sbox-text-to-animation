@@ -378,6 +378,38 @@ public sealed class RigAnalysis
             if (table[a] != a || table[b] != b) continue;
             table[a] = b; table[b] = a;
         }
+        PairParents(bones, table);
+    }
+
+    /// <summary>
+    /// Mirrored bones hang off mirrored parents: when two partners have different parents that reflect onto each
+    /// other from opposite sides, those parents are partners too, however close to the centre plane they sit
+    /// (a person's clavicles start less than an inch off the middle).
+    /// </summary>
+    void PairParents(List<int> bones, int[] table)
+    {
+        var inSet = new HashSet<int>(bones);
+        var eps = 1e-4f * Size;
+        for (var changed = true; changed;)
+        {
+            changed = false;
+            foreach (var a in bones)
+            {
+                var b = table[a];
+                if (b == a || a > b) continue;
+                var pa = Skeleton[a].ParentIndex;
+                var pb = Skeleton[b].ParentIndex;
+                if (pa < 0 || pb < 0 || pa == pb || !inSet.Contains(pa) || !inSet.Contains(pb)) continue;
+                if (table[pa] != pa || table[pb] != pb) continue;
+                var la = Lateral(pa);
+                var lb = Lateral(pb);
+                if (MathF.Sign(la) == MathF.Sign(lb) || MathF.Abs(la) < eps || MathF.Abs(lb) < eps) continue;
+                var reflected = _p[pa] - 2f * la * MirrorNormal;
+                if ((reflected - _p[pb]).Length() > 0.03f * Size) continue;
+                table[pa] = pb; table[pb] = pa;
+                changed = true;
+            }
+        }
     }
 
     /// <summary>
@@ -469,7 +501,9 @@ public sealed class RigAnalysis
         {
             if (!InBody[b] || !Symmetric) { Side[b] = BoneSide.Center; continue; }
             var lat = Lateral(b) * leftSign;
-            Side[b] = lat > tc ? BoneSide.Left : lat < -tc ? BoneSide.Right : BoneSide.Center;
+            // a mirrored bone has a side however close to the middle it sits (paired through its children)
+            var threshold = Mirror[b] != b ? 0f : tc;
+            Side[b] = lat > threshold ? BoneSide.Left : lat < -threshold ? BoneSide.Right : BoneSide.Center;
         }
         // bones that cross to the other side of the body from their parent are IK rules, not anatomy
         for (var b = 0; b < Skeleton.Count; b++)

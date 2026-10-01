@@ -16,3 +16,4 @@ dev/editor-rig/*.arm
 dev/fixtures/large/
 dev/editor-rig/gate_shots/
 .claude/
+dev/Tests/TestResults/

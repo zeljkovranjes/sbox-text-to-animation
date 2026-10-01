@@ -133,6 +133,7 @@ public static class EditorGate
 		// ---- 2. the opened model
 		var session = window.Session;
 		Check( "model opens", session.HasModel );
+		DumpSkeleton( session.Rig, Path.Combine( Path.GetDirectoryName( _resultPath )!, "gate_skeleton.json" ) );
 		Check( "humanoid recognised", session.Rig?.IsHumanoid == true, string.Join( "; ", session.Rig?.Problems ?? new List<string>() ) );
 		Set( "bones", session.Rig?.Skeleton.Count ?? 0 );
 		Set( "sequences", session.Sequences.Count );
@@ -492,6 +493,35 @@ public static class EditorGate
 		var result = await task;
 		await EngineThread.SwitchToMainThread();
 		check( "generation can be cancelled", wasBusy && !result && !session.Busy && session.Workspace.Clips.Count == clipsBefore, $"busy={wasBusy} result={result}" );
+	}
+
+	/// <summary>Writes the engine skeleton (rest locals) and what the shape analysis made of it, for offline tests.</summary>
+	static void DumpSkeleton( MotionRig rig, string path )
+	{
+		try
+		{
+			var s = rig.Skeleton;
+			var a = rig.Analysis;
+			var dump = new
+			{
+				bones = Enumerable.Range( 0, s.Count ).Select( i => new
+				{
+					name = s[i].Name, parent = s[i].ParentIndex,
+					pos = new[] { s[i].RestLocal.Pos.X, s[i].RestLocal.Pos.Y, s[i].RestLocal.Pos.Z },
+					rot = new[] { s[i].RestLocal.Rot.X, s[i].RestLocal.Rot.Y, s[i].RestLocal.Rot.Z, s[i].RestLocal.Rot.W },
+				} ).ToList(),
+				analysis = new
+				{
+					a.IsHumanoid,
+					limbs = a.Limbs.Select( l => $"{l.Kind} {l.Side}: {string.Join( ",", l.Chain.Select( b => s[b].Name ) )}" ).ToList(),
+					tails = a.Tails.Select( t => string.Join( ",", t.Select( b => s[b].Name ) ) ).ToList(),
+					spine = string.Join( ",", a.SpineChain.Select( b => s[b].Name ) ),
+					bodyRoot = s[a.BodyRoot].Name,
+				},
+			};
+			File.WriteAllText( path, JsonSerializer.Serialize( dump, new JsonSerializerOptions { WriteIndented = true } ) );
+		}
+		catch ( Exception e ) { Note( $"skeleton dump failed: {e.Message}" ); }
 	}
 
 	static List<string> Kv3Sequences( string vmdlPath )
