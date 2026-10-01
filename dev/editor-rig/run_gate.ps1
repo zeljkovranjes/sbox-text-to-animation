@@ -13,7 +13,8 @@
 param(
     [string]$SboxRoot = "C:\Program Files (x86)\Steam\steamapps\common\sbox",
     [int]$TimeoutSec = 900,
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$Capture   # screenshot the gate editor's own Text to Animation window (PrintWindow) + showcase pause
 )
 $ErrorActionPreference = "Stop"
 $repoRoot   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -58,10 +59,15 @@ Set-Content -Path "$resultPath.arm" -Value (Get-Date -Format o) -Encoding ascii
 $preLogLen = 0; if (Test-Path $sboxLog) { $preLogLen = (Get-Item $sboxLog).Length }
 
 $env:T2A_GATE = $resultPath
+if ($Capture) { $env:T2A_GATE_SHOWCASE = "1" }
 try {
     Write-Host "Launching: `"$sboxExe`" -project `"$sbproj`""
     $proc = Start-Process -FilePath $sboxExe -ArgumentList @("-project", "`"$sbproj`"") -WorkingDirectory $SboxRoot -PassThru
-} finally { Remove-Item Env:T2A_GATE -ErrorAction SilentlyContinue }
+} finally { Remove-Item Env:T2A_GATE -ErrorAction SilentlyContinue; Remove-Item Env:T2A_GATE_SHOWCASE -ErrorAction SilentlyContinue }
+$captureProc = $null
+if ($Capture) {
+    $captureProc = Start-Process powershell -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "capture_windows.ps1"), "-ProcessId", $proc.Id, "-IntervalSec", "3", "-MaxShots", "200") -WindowStyle Hidden -PassThru
+}
 
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $completed = $false
@@ -80,6 +86,7 @@ while ((Get-Date) -lt $deadline) {
 if ($completed -and -not $proc.HasExited) { $proc.WaitForExit(30000) | Out-Null }
 if (-not $proc.HasExited) { Write-Warning "Stopping the gate editor (pid $($proc.Id))."; taskkill /PID $proc.Id /T /F | Out-Null }
 Remove-Item "$resultPath.arm" -Force -ErrorAction SilentlyContinue
+if ($captureProc -and -not $captureProc.HasExited) { Stop-Process -Id $captureProc.Id -Force -ErrorAction SilentlyContinue }
 
 # per-run log slice
 $newLog = @()

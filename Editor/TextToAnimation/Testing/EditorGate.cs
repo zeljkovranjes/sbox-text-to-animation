@@ -229,6 +229,20 @@ public static class EditorGate
 		var backups = Path.Combine( root, "text_to_animation", "backups" );
 		Check( "backups kept", Directory.Exists( backups ) && Directory.GetFiles( backups ).Length > 0 );
 
+		// ---- 13. showcase for window screenshots (driver -Capture): each tab for a few seconds
+		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" )
+		{
+			session.SelectClip( generated ?? imported );
+			session.SelectBone( session.Rig.Skeleton.IndexOf( "arm_upper_R" ) );
+			session.Playing = true;
+			foreach ( var tab in new[] { 0, 1, 2, 3, 0 } )
+			{
+				window.ShowTab( tab );
+				Note( $"showcase tab {tab}" );
+				await EngineThread.DelayOnMain( 4000 );
+			}
+		}
+
 		return checks.Values.All( v => v );
 	}
 

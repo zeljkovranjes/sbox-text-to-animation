@@ -39,7 +39,8 @@ public sealed class GeneratePanel : Widget
 	readonly Widget _durationRow;
 	readonly FloatSlider _duration;
 	readonly Label _durationLabel;
-	readonly SegmentedControl _takes;
+	readonly ComboBox _takes;
+	int _takeCount = 1;
 	readonly ComboBox _quality;
 	readonly LineEdit _seed;
 	readonly FloatSlider _guidance;
@@ -131,8 +132,12 @@ public sealed class GeneratePanel : Widget
 		_duration.OnValueEdited = () => _durationLabel.Text = $"{_duration.Value:0.0} s";
 
 		var takesRow = TaStyle.FieldRow( card, card.Layout, "Takes", 70f, "How many different versions to generate" );
-		_takes = takesRow.Add( new SegmentedControl( card ) { FixedHeight = 26 }, 1 );
-		foreach ( var n in new[] { "1", "2", "3", "4" } ) _takes.AddOption( n, null );
+		_takes = takesRow.Add( TaStyle.Field( new ComboBox( card ) ), 1 );
+		for ( var n = 1; n <= 4; n++ )
+		{
+			var count = n;
+			_takes.AddItem( count == 1 ? "1 take" : $"{count} takes", null, () => _takeCount = count, selected: count == 1 );
+		}
 
 		var qualityRow = TaStyle.FieldRow( card, card.Layout, "Quality", 70f, "More steps = smoother, more accurate motion, but slower" );
 		_quality = qualityRow.Add( TaStyle.Field( new ComboBox( card ) ), 1 );
@@ -144,7 +149,7 @@ public sealed class GeneratePanel : Widget
 		_seed = seedRow.Add( TaStyle.Field( new LineEdit( card ) { Text = Random.Shared.Next( 1, 99999 ).ToString() } ), 1 );
 		seedRow.Add( TaStyle.Icon( card, "casino", () => _seed.Text = Random.Shared.Next( 1, 99999 ).ToString(), "New random seed", 28 ) );
 
-		var guidanceRow = TaStyle.FieldRow( card, card.Layout, "Prompt weight", 70f, "How strictly the motion follows the text" );
+		var guidanceRow = TaStyle.FieldRow( card, card.Layout, "Guidance", 70f, "How strictly the motion follows the text" );
 		_guidance = guidanceRow.Add( new FloatSlider( card ) { Minimum = 1.5f, Maximum = 6f, Value = 3f }, 1 );
 		_guidanceLabel = guidanceRow.Add( TaStyle.Muted( new Label( "3.0", card ) { FixedWidth = 30 } ) );
 		_guidance.OnValueEdited = () => _guidanceLabel.Text = $"{_guidance.Value:0.0}";
@@ -256,7 +261,7 @@ public sealed class GeneratePanel : Widget
 			DurationSeconds = mode == GenerationMode.TextToMotion ? _duration.Value : 0,
 			OutputFps = clip?.Fps ?? _session.Workspace?.DefaultFps ?? 30f,
 			Seed = int.TryParse( _seed.Text, out var seed ) ? seed : Random.Shared.Next(),
-			Count = _takes.SelectedIndex + 1,
+			Count = _takeCount,
 			Guidance = _guidance.Value,
 			Steps = _steps,
 			SourceFrames = frames,

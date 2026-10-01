@@ -15,6 +15,7 @@ public sealed class EditPanel : Widget
 	readonly Label _info;
 	readonly Checkbox _looping;
 	readonly ComboBox _fps;
+	float _fpsShown = -1f;
 	readonly FloatSlider _speed;
 	readonly Label _speedLabel;
 	readonly Label _rangeLabel;
@@ -45,11 +46,6 @@ public sealed class EditPanel : Widget
 		loopRow.AddStretchCell();
 		var fpsRow = TaStyle.FieldRow( clipCard, clipCard.Layout, "Frame rate", 70f, "Resample the animation (the duration stays the same)" );
 		_fps = fpsRow.Add( TaStyle.Field( new ComboBox( clipCard ) ), 1 );
-		foreach ( var fps in new[] { 24f, 30f, 60f } )
-		{
-			var f = fps;
-			_fps.AddItem( $"{f:0} fps", null, () => { if ( !_refreshing ) _session.Edit( $"Resample to {f:0} fps", c => ClipOps.Resample( c, _session.Rig, f ) ); } );
-		}
 		var speedRow = TaStyle.FieldRow( clipCard, clipCard.Layout, "Speed", 70f, "Make the motion faster (>1) or slower (<1)" );
 		_speed = speedRow.Add( new FloatSlider( clipCard ) { Minimum = 0.25f, Maximum = 3f, Value = 1f }, 1 );
 		_speedLabel = speedRow.Add( TaStyle.Muted( new Label( "1.00x", clipCard ) { FixedWidth = 40 } ) );
@@ -72,19 +68,23 @@ public sealed class EditPanel : Widget
 		_rangeButtons.Layout.Add( new TaButton( _rangeButtons, "Repeat", "content_copy", () => RangeEdit( "Duplicate section", ( c, a, b ) => ClipOps.DuplicateSection( c, _session.Rig, a, b ) ), "Insert a copy of the selected range after it" ) );
 		var cutRow = cutCard.Layout.AddRow();
 		cutRow.Spacing = 4;
-		cutRow.Add( new TaButton( cutCard, "Split here", "call_split", Split, "Split into two animations at the playhead" ) );
-		cutRow.Add( new TaButton( cutCard, "Reverse", "swap_horiz", () => _session.Edit( "Reverse", c => ClipOps.Reverse( c, _session.Rig ) ), "Play the motion backwards" ) );
-		cutRow.Add( new TaButton( cutCard, "Trim start", "first_page", () => _session.Edit( "Trim start", c => ClipOps.Crop( c, _session.Rig, _session.CurrentFrame, c.FrameCount - 1 ) ), "Remove everything before the playhead" ) );
-		cutRow.Add( new TaButton( cutCard, "Trim end", "last_page", () => _session.Edit( "Trim end", c => ClipOps.Crop( c, _session.Rig, 0, _session.CurrentFrame ) ), "Remove everything after the playhead" ) );
+		cutRow.Add( new TaButton( cutCard, "Split here", "call_split", Split, "Split into two animations at the playhead" ), 1 );
+		cutRow.Add( new TaButton( cutCard, "Reverse", "swap_horiz", () => _session.Edit( "Reverse", c => ClipOps.Reverse( c, _session.Rig ) ), "Play the motion backwards" ), 1 );
+		var trimRow = cutCard.Layout.AddRow();
+		trimRow.Spacing = 4;
+		trimRow.Add( new TaButton( cutCard, "Trim start", "first_page", () => _session.Edit( "Trim start", c => ClipOps.Crop( c, _session.Rig, _session.CurrentFrame, c.FrameCount - 1 ) ), "Remove everything before the playhead" ), 1 );
+		trimRow.Add( new TaButton( cutCard, "Trim end", "last_page", () => _session.Edit( "Trim end", c => ClipOps.Crop( c, _session.Rig, 0, _session.CurrentFrame ) ), "Remove everything after the playhead" ), 1 );
 
 		// ---- root motion
 		var rootCard = Layout.Add( new TaCard( this ) );
 		rootCard.Header( "route", "Root motion" ).AddStretchCell();
 		var rootRow = rootCard.Layout.AddRow();
 		rootRow.Spacing = 4;
-		rootRow.Add( new TaButton( rootCard, "In place", "my_location", () => _session.Edit( "Make in place", c => ClipOps.MakeInPlace( c, _session.Rig ) ), "Remove travel: the character stays on the spot" ) );
-		rootRow.Add( new TaButton( rootCard, "Remove drift", "near_me_disabled", () => _session.Edit( "Remove root drift", c => ClipOps.RemoveRootDrift( c, _session.Rig ) ), "End where it started, facing the same way (idles, loops)" ) );
-		rootRow.Add( new TaButton( rootCard, "Reset start", "restart_alt", () => _session.Edit( "Reset start", c => ClipOps.ResetStart( c, _session.Rig ) ), "Start at the model's origin facing forward" ) );
+		rootRow.Add( new TaButton( rootCard, "In place", "my_location", () => _session.Edit( "Make in place", c => ClipOps.MakeInPlace( c, _session.Rig ) ), "Remove travel: the character stays on the spot" ), 1 );
+		rootRow.Add( new TaButton( rootCard, "Remove drift", "near_me_disabled", () => _session.Edit( "Remove root drift", c => ClipOps.RemoveRootDrift( c, _session.Rig ) ), "End where it started, facing the same way (idles, loops)" ), 1 );
+		rootRow = rootCard.Layout.AddRow();
+		rootRow.Spacing = 4;
+		rootRow.Add( new TaButton( rootCard, "Reset start", "restart_alt", () => _session.Edit( "Reset start", c => ClipOps.ResetStart( c, _session.Rig ) ), "Start at the model's origin facing forward" ), 1 );
 		var offRow = rootCard.Layout.AddRow();
 		offRow.Spacing = 4;
 		offRow.Add( TaStyle.Muted( new Label( "Move", rootCard ) { FixedWidth = 40 } ) );
@@ -177,6 +177,7 @@ public sealed class EditPanel : Widget
 			if ( !_name.IsFocused ) _name.Text = clip.Name;
 			_info.Text = $"{clip.FrameCount} frames · {clip.Duration:0.00} s · {clip.Events.Count} events";
 			_looping.Value = clip.Looping;
+			RefreshFps( clip.Fps );
 		}
 		finally { _refreshing = false; }
 		_rangeLabel.Text = _session.Range is { } r
@@ -184,6 +185,23 @@ public sealed class EditPanel : Widget
 			: "Select a range: Shift+drag on the timeline.";
 		_rangeButtons.Enabled = _session.Range is not null;
 		RefreshIssues( clip );
+	}
+
+	/// <summary>Lists the common rates plus the clip's own, with the clip's rate selected.</summary>
+	void RefreshFps( float current )
+	{
+		if ( MathF.Abs( current - _fpsShown ) < 0.01f ) return;
+		_fpsShown = current;
+		_fps.Clear();
+		var rates = new System.Collections.Generic.List<float> { 24f, 30f, 60f };
+		if ( !rates.Any( r => MathF.Abs( r - current ) < 0.01f ) ) rates.Add( current );
+		rates.Sort();
+		foreach ( var rate in rates )
+		{
+			var f = rate;
+			var isCurrent = MathF.Abs( f - current ) < 0.01f;
+			_fps.AddItem( $"{f:0.##} fps", null, () => { if ( !_refreshing && MathF.Abs( f - _fpsShown ) > 0.01f ) _session.Edit( $"Resample to {f:0.##} fps", c => ClipOps.Resample( c, _session.Rig, f ) ); }, selected: isCurrent );
+		}
 	}
 
 	void ClearIssues() => _issues.Layout.Clear( true );
