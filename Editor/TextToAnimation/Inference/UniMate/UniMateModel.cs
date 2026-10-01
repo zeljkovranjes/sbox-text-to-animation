@@ -114,7 +114,12 @@ public sealed class UniMateModel
 				return new OnnxSession( model, token );
 			}
 			// keep at most two skeleton sizes in memory (the step graph holds ~300 MB of weights)
-			if ( _graphs.Count >= 2 ) _graphs.Remove( _graphs.Keys.First() );
+			if ( _graphs.Count >= 2 )
+			{
+				var evicted = _graphs.Keys.First();
+				_graphs.Remove( evicted );
+				if ( _gpu.Remove( evicted, out var program ) ) program.Dispose();
+			}
 			g = (Load( prepPath ), Load( stepPath ));
 			_graphs[joints] = g;
 			return g;
@@ -206,7 +211,7 @@ public sealed class UniMateModel
 			Array.Copy( state, 0, input, n, n );
 			feed["x"] = Tensor.Float( new[] { Batch, J, 12, Frames }, input );
 			feed["t"] = Tensor.Float( new[] { Batch }, new[] { t, t } );
-			var v = step.Run( feed, token )["v"].F;
+			var v = RunStep( J, step, feed, token );
 			var result = new float[n];
 			var g = settings.Guidance;
 			for ( var i = 0; i < n; i++ ) result[i] = v[n + i] + g * (v[i] - v[n + i]); // v_u + g (v_c - v_u)
@@ -261,6 +266,89 @@ public sealed class UniMateModel
 			progress?.Invoke( (s + 1f) / steps );
 		}
 		return x;
+	}
+
+	readonly Dictionary<int, IGpuProgram> _gpu = new();
+	readonly HashSet<int> _gpuRefused = new();
+
+	/// <summary>
+	/// One network call: on the GPU when a program for this skeleton size exists; otherwise on the CPU, and the first
+	/// CPU call is traced into a GPU plan (shapes are fixed per size) which is then checked against that call's
+	/// result before later calls use it. Any GPU failure falls back to the CPU for good.
+	/// </summary>
+	float[] RunStep( int joints, OnnxSession step, Dictionary<string, Tensor> feed, CancellationToken token )
+	{
+		IGpuProgram program;
+		lock ( _lock ) _gpu.TryGetValue( joints, out program );
+		if ( program is not null && GpuAcceleration.Enabled )
+		{
+			try { return program.Run( feed )["v"]; }
+			catch ( Exception e ) when ( e is not OperationCanceledException )
+			{
+				DisableGpu( joints, $"The GPU run failed ({e.Message}); using the CPU." );
+			}
+		}
+		var tryGpu = GpuAcceleration.Enabled && GpuAcceleration.Compiler is not null;
+		lock ( _lock ) tryGpu &= !_gpuRefused.Contains( joints ) && !_gpu.ContainsKey( joints );
+		if ( !tryGpu ) return step.Run( feed, token )["v"].F;
+
+		var recorder = new GpuPlan.Recorder();
+		Dictionary<string, Tensor> cpu;
+		lock ( step ) // the trace hook belongs to the session
+		{
+			step.Trace = recorder.Record;
+			try { cpu = step.Run( feed, token ); }
+			finally { step.Trace = null; }
+		}
+		var v = cpu["v"].F;
+		var plan = GpuPlan.Build( step, recorder );
+		if ( plan is null ) { Refuse( joints, $"No GPU plan: {GpuPlan.LastRefusal}." ); return v; }
+		try
+		{
+			program = GpuAcceleration.Compiler( plan, step );
+			var check = program.Run( feed )["v"];
+			var worst = 0f;
+			for ( var i = 0; i < v.Length; i++ ) worst = MathF.Max( worst, MathF.Abs( check[i] - v[i] ) );
+			if ( !(worst <= GpuAcceleration.AgreementTolerance) )
+			{
+				// find the first kernel that disagrees (one more traced CPU run keeps every value)
+				var values = new GpuPlan.Recorder { KeepValues = true };
+				lock ( step )
+				{
+					step.Trace = values.Record;
+					try { step.Run( feed, token ); }
+					finally { step.Trace = null; }
+				}
+				var where = program.Diagnose( feed, values.Values );
+				program.Dispose();
+				Refuse( joints, $"The GPU result differs from the CPU by {worst:G3}; using the CPU. First difference: {where ?? "none found"}" );
+				return v;
+			}
+			lock ( _lock ) _gpu[joints] = program;
+			GpuAcceleration.Status = null;
+		}
+		catch ( Exception e ) when ( e is not OperationCanceledException )
+		{
+			program?.Dispose();
+			Refuse( joints, $"The GPU couldn't be used ({e.Message}); using the CPU." );
+		}
+		return v;
+	}
+
+	void Refuse( int joints, string why )
+	{
+		lock ( _lock ) _gpuRefused.Add( joints );
+		GpuAcceleration.Status = why;
+	}
+
+	void DisableGpu( int joints, string why )
+	{
+		lock ( _lock )
+		{
+			if ( _gpu.Remove( joints, out var p ) ) p.Dispose();
+			_gpuRefused.Add( joints );
+		}
+		GpuAcceleration.Status = why;
 	}
 
 	/// <summary>Standard normal noise (J,12,T) from a seed (Box-Muller).</summary>

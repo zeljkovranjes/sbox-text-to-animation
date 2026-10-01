@@ -513,6 +513,24 @@ public static class EditorGate
 			return worst * 180f / MathF.PI;
 		}
 		var motionBones = Enumerable.Range( 0, rig.Skeleton.Count ).Where( rig.IsMotionBone ).ToList();
+
+		// the network on the GPU: same request, same seed, GPU then CPU - the same motion, faster
+		{
+			var gpuWatch = Stopwatch.StartNew();
+			var onGpu = await Generate( GenerationMode.TextToMotion, new[] { "walk forward" }, 1, "Gate GPU" );
+			var gpuSeconds = gpuWatch.Elapsed.TotalSeconds;
+			var gpuStatus = Inference.Onnx.GpuAcceleration.Status;
+			Inference.Onnx.GpuAcceleration.Enabled = false;
+			var cpuWatch = Stopwatch.StartNew();
+			var onCpu = await Generate( GenerationMode.TextToMotion, new[] { "walk forward" }, 1, "Gate CPU" );
+			var cpuSeconds = cpuWatch.Elapsed.TotalSeconds;
+			Inference.Onnx.GpuAcceleration.Enabled = true;
+			var same = onGpu.Count == 1 && onCpu.Count == 1 && onGpu[0].FrameCount == onCpu[0].FrameCount;
+			var diff = same ? MaxAngle( onGpu[0].Frames, onCpu[0].Frames, motionBones, Enumerable.Range( 0, onGpu[0].FrameCount ) ) : float.NaN;
+			check( "generation runs on the GPU", gpuStatus is null && same, gpuStatus ?? $"GPU {gpuSeconds:0.0} s, CPU {cpuSeconds:0.0} s" );
+			check( "the GPU makes the same motion as the CPU", same && diff < 0.5f, $"{diff:0.000}° max over every bone and frame" );
+			foreach ( var c in onGpu.Concat( onCpu ) ) session.Workspace.Clips.Remove( c );
+		}
 		var sourceFrames = source.EvaluateFrames( rig.Skeleton );
 		var all = Enumerable.Range( 0, source.FrameCount ).ToList();
 
@@ -710,6 +728,25 @@ public static class EditorGate
 				if ( clip is not null ) made.Add( clip );
 			}
 			foreach ( var clip in made ) DumpMotion( rig, clip, Path.Combine( shots, $"creature_{creature.Name}_{clip.EffectiveSequenceName}.motion.json" ) );
+			Note( $"{creature.Name}: GPU {Inference.Onnx.GpuAcceleration.Status ?? "in use"}" );
+			if ( made.Count > 0 && Inference.Onnx.GpuAcceleration.Status is null )
+			{
+				// the same first request on the CPU: the GPU must make the same motion on this rig too
+				Inference.Onnx.GpuAcceleration.Enabled = false;
+				var before = session.Workspace.Clips.ToList();
+				window.SetIntent( UI.EditIntent.New );
+				await window.RunEditPromptAsync( creature.Prompts[0] );
+				await EngineThread.SwitchToMainThread();
+				Inference.Onnx.GpuAcceleration.Enabled = true;
+				var cpu = session.Workspace.Clips.Except( before ).FirstOrDefault();
+				var worst = 0f;
+				if ( cpu is not null && cpu.FrameCount == made[0].FrameCount )
+					for ( var f = 0; f < cpu.FrameCount; f++ )
+						for ( var b = 0; b < rig.Skeleton.Count; b++ )
+							worst = MathF.Max( worst, Maths.MathQ.AngleBetween( cpu.Frames[f][b].Rot, made[0].Frames[f][b].Rot ) * 180f / MathF.PI );
+				check( $"{creature.Name}: the GPU makes the same motion as the CPU", cpu is not null && cpu.FrameCount == made[0].FrameCount && worst < 0.5f, $"{worst:0.000}° max" );
+				if ( cpu is not null ) session.Workspace.Clips.Remove( cpu );
+			}
 			check( $"{creature.Name}: generates from text", made.Count == creature.Prompts.Length && made.All( c => c.FrameCount > 30 ), string.Join( ", ", made.Select( c => c.Name ) ) );
 			if ( made.Count == 0 ) return;
 			var errors = made.SelectMany( c => ClipQuality.Analyze( c, rig ) ).Where( q => q.Severity == IssueSeverity.Error ).Select( q => q.Code ).ToList();

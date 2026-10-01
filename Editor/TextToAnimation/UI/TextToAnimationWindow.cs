@@ -78,6 +78,7 @@ public sealed class TextToAnimationWindow : Widget
 	public TextToAnimationWindow( Widget parent ) : base( parent )
 	{
 		_instance = this;
+		GpuProgram.Register(); // generation runs the network on the GPU when it can (CPU otherwise)
 		Name = "TextToAnimation";
 		WindowTitle = Title;
 		SetWindowIcon( Icon );

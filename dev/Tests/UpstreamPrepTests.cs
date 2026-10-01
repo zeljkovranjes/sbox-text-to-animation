@@ -203,7 +203,7 @@ public class UpstreamPrepTests
 	static readonly System.Numerics.Quaternion BlenderToEngine = System.Numerics.Quaternion.CreateFromAxisAngle( System.Numerics.Vector3.UnitZ, MathF.PI / 2 );
 
 	/// <summary>The rig as the engine would give it (bones, parents, rest local transforms) with its FBX skin weights attached.</summary>
-	static (TextToAnimation.Animation.MotionRig Rig, Dictionary<string, int> Index) EngineRig( string rig )
+	internal static (TextToAnimation.Animation.MotionRig Rig, Dictionary<string, int> Index) EngineRig( string rig )
 	{
 		var j = JsonDocument.Parse( File.ReadAllText( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep", $"prep_{rig}.json" ) ) ).RootElement;
 		var raw = j.GetProperty( "raw" ).EnumerateArray().ToList();

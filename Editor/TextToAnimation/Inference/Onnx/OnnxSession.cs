@@ -24,6 +24,9 @@ public sealed class OnnxSession
 	/// <summary>When set, accumulates time per operator type (diagnostics).</summary>
 	public Dictionary<string, double> Profile { get; set; }
 
+	/// <summary>Called after every node with its inputs and outputs (shape recording, debugging).</summary>
+	public Action<OnnxNode, Tensor[], Tensor[]> Trace { get; set; }
+
 	/// <summary>Worker threads used by the heavy kernels.</summary>
 	public int MaxThreads { get => _ctx.MaxThreads; set => _ctx.MaxThreads = Math.Max( 1, value ); }
 
@@ -97,6 +100,7 @@ public sealed class OnnxSession
 			{
 				throw new InvalidOperationException( $"{node} failed ({string.Join( ", ", args.Select( a => a?.ToString() ?? "-" ) )}): {e.Message}", e );
 			}
+			Trace?.Invoke( node, args, outputs );
 			if ( Profile is not null )
 			{
 				var ms = System.Diagnostics.Stopwatch.GetElapsedTime( started ).TotalMilliseconds;
