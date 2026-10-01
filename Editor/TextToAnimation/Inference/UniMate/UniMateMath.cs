@@ -3,6 +3,8 @@ using System.Numerics;
 
 namespace TextToAnimation.Editor.Inference.UniMate;
 
+using Vector3 = System.Numerics.Vector3; // s&box declares a global Vector3 that would shadow System.Numerics
+
 /// <summary>A 3x3 rotation matrix acting on column vectors (row-major storage), as in UniMate's numpy code.</summary>
 public struct M3
 {

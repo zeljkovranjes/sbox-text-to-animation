@@ -5,6 +5,8 @@ using System.Numerics;
 
 namespace TextToAnimation.Editor.Inference.UniMate;
 
+using Vector3 = System.Numerics.Vector3; // s&box declares a global Vector3 that would shadow System.Numerics
+
 /// <summary>Per-joint feature normalisation (dataset_stats.npy, "mixamo" family for humanoids).</summary>
 public sealed class UniMateStats
 {

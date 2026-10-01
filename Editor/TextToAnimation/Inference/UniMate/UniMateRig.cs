@@ -9,6 +9,8 @@ using TextToAnimation.Processing;
 
 namespace TextToAnimation.Editor.Inference.UniMate;
 
+using Vector3 = System.Numerics.Vector3; // s&box declares a global Vector3 that would shadow System.Numerics
+
 /// <summary>
 /// The bridge between a workspace skeleton (engine space) and UniMate: which bones the model animates
 /// (the mapped humanoid body, plus virtual tip joints so leaf bones such as the head, hands and toes get a

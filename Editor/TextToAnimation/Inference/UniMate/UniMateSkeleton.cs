@@ -5,6 +5,8 @@ using System.Numerics;
 
 namespace TextToAnimation.Editor.Inference.UniMate;
 
+using Vector3 = System.Numerics.Vector3; // s&box declares a global Vector3 that would shadow System.Numerics
+
 /// <summary>
 /// A skeleton prepared for UniMate: joints in UniMate's BFS order with parents, the canonical T-pose
 /// (Y-up, facing +Z, tree diameter 2), the transform back to source space, cleaned joint names and the
