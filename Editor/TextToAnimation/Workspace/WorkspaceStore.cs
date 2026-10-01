@@ -101,6 +101,7 @@ public sealed class WorkspaceStore
         public DateTime ModifiedUtc { get; set; }
         public Guid? ActiveClipId { get; set; }
         public float DefaultFps { get; set; } = 30f;
+        public float[] RootCompensation { get; set; }
         public List<ClipDto> Clips { get; set; } = new();
     }
 
@@ -143,7 +144,7 @@ public sealed class WorkspaceStore
         var dto = new WorkspaceDto
         {
             Id = ws.Id, ModelPath = ws.ModelPath, ModelName = ws.ModelName, SkeletonFingerprint = ws.SkeletonFingerprint,
-            CreatedUtc = ws.CreatedUtc, ModifiedUtc = ws.ModifiedUtc, ActiveClipId = ws.ActiveClipId, DefaultFps = ws.DefaultFps,
+            CreatedUtc = ws.CreatedUtc, ModifiedUtc = ws.ModifiedUtc, ActiveClipId = ws.ActiveClipId, DefaultFps = ws.DefaultFps, RootCompensation = ws.RootCompensation,
             Clips = ws.Clips.Select(ToDto).ToList(),
         };
         AtomicWrite(ManifestPath(ws.Id), Encoding.UTF8.GetBytes(JsonSerializer.Serialize(dto, Json)));
@@ -166,7 +167,7 @@ public sealed class WorkspaceStore
         var ws = new AnimationWorkspace
         {
             Id = dto.Id, ModelPath = dto.ModelPath, ModelName = dto.ModelName, SkeletonFingerprint = dto.SkeletonFingerprint,
-            CreatedUtc = dto.CreatedUtc, ModifiedUtc = dto.ModifiedUtc, ActiveClipId = dto.ActiveClipId, DefaultFps = dto.DefaultFps,
+            CreatedUtc = dto.CreatedUtc, ModifiedUtc = dto.ModifiedUtc, ActiveClipId = dto.ActiveClipId, DefaultFps = dto.DefaultFps, RootCompensation = dto.RootCompensation,
         };
         foreach (var c in dto.Clips)
         {

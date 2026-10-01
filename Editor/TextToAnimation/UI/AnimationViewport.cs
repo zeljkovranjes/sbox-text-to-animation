@@ -40,6 +40,12 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	public bool ShowModel { get; set; } = true;
 	public bool FollowCharacter { get; set; } = true;
 
+	/// <summary>
+	/// When set, the engine plays this compiled sequence of the model itself (no bone overrides) at the session
+	/// playhead - the ground truth of what a saved animation looks like in game.
+	/// </summary>
+	public string EngineSequence { get; set; }
+
 	public AnimationViewport( Widget parent, EditorSession session ) : base( parent )
 	{
 		_session = session;
@@ -65,9 +71,14 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	}
 
 	/// <summary>Loads the workspace model into the view.</summary>
+	/// <summary>
+	/// Shows <paramref name="model"/>. Always rebuilds the scene model and the bone map: a save recompiles the
+	/// model in place (the same Model object) and the compiler may reorder its bones, so a cached map would pose
+	/// the wrong bones. The camera is only reframed for a different model.
+	/// </summary>
 	public void SetModel( Model model )
 	{
-		if ( model == _model && _sceneModel.IsValid() ) return;
+		var reframe = model?.ResourcePath != _model?.ResourcePath;
 		_model = model;
 		_sceneModel?.Delete();
 		_sceneModel = null;
@@ -78,7 +89,7 @@ public sealed class AnimationViewport : SceneRenderingWidget
 		_bindScale = skeleton.Bones.Select( b => model.Bones.GetBone( b.Name )?.LocalTransform.Scale ?? Vector3.One ).ToArray();
 		_world = new XForm[skeleton.Count];
 		_pose = new XForm[skeleton.Count];
-		FrameCharacter();
+		if ( reframe ) FrameCharacter();
 	}
 
 	/// <summary>Frames the whole character (double click does the same).</summary>
@@ -154,6 +165,15 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	{
 		if ( !_sceneModel.IsValid() ) return;
 		_sceneModel.RenderingEnabled = ShowModel;
+		if ( !string.IsNullOrEmpty( EngineSequence ) )
+		{
+			_sceneModel.ClearBoneOverrides();
+			if ( _sceneModel.CurrentSequence.Name != EngineSequence ) _sceneModel.CurrentSequence.Name = EngineSequence;
+			var fps = _session.ActiveClip?.Fps ?? 30f;
+			_sceneModel.CurrentSequence.Time = _session.Playhead / fps;
+			_sceneModel.Update( 0f );
+			return;
+		}
 		for ( var i = 0; i < _boneMap.Length; i++ )
 		{
 			if ( _boneMap[i] < 0 ) continue;

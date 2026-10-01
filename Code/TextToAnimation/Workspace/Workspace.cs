@@ -31,6 +31,12 @@ public sealed class AnimationWorkspace
     /// <summary>Workspace-wide default frame rate for new clips.</summary>
     public float DefaultFps { get; set; } = 30f;
 
+    /// <summary>
+    /// Root rotation (x, y, z, w) the model's DMX animations need to play as edited, measured on the first save
+    /// (null until then: the Citizen's +90° yaw is tried first).
+    /// </summary>
+    public float[]? RootCompensation { get; set; }
+
     public AnimClip? Find(Guid id) => Clips.FirstOrDefault(c => c.Id == id);
 
     /// <summary>A clip name not used by another clip ("Walk", "Walk 2", ...).</summary>

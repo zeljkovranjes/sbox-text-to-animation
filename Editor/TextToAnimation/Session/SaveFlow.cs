@@ -63,8 +63,15 @@ public sealed class SaveFlow
 		try
 		{
 			var request = new ClipSaveRequest { Clip = clip, Frames = FinalFrames( clip ), SequenceName = sequence, ReplaceExisting = replace };
-			var result = await VmdlSaveService.SaveAsync( _session.ModelAsset, _session.Rig, new[] { request }, t => _session.SetStatus( t ), CancellationToken.None );
+			var result = await VmdlSaveService.SaveAsync( _session.ModelAsset, _session.Rig, new[] { request }, t => _session.SetStatus( t ), CancellationToken.None,
+				RootCompensation );
 			await EngineThread.SwitchToMainThread();
+			if ( result.LearnedRootCompensation is { } learned )
+			{
+				// remember how this model's animations must be oriented, so the next save is right first time
+				_session.Workspace.RootCompensation = new[] { learned.X, learned.Y, learned.Z, learned.W };
+				_session.FlushSave();
+			}
 			if ( !result.Success )
 			{
 				_session.SetStatus( string.Join( " ", result.Errors.Concat( result.Notes ) ), UI.Tone.Red );
@@ -108,7 +115,7 @@ public sealed class SaveFlow
 		try
 		{
 			var items = clips.Select( c => (Sequence: c.EffectiveSequenceName, Clip: c, Frames: FinalFrames( c )) ).ToList();
-			var files = VmdlSaveService.Export( folder, _session.ModelAsset.Path, _session.Rig, items );
+			var files = VmdlSaveService.Export( folder, _session.ModelAsset.Path, _session.Rig, items, RootCompensation );
 			var vmdl = files.FirstOrDefault( f => f.EndsWith( ".vmdl", StringComparison.OrdinalIgnoreCase ) );
 			if ( vmdl is null ) { _session.SetStatus( "Couldn't create the animation model.", UI.Tone.Red ); return false; }
 			var compile = await VmdlCompiler.RegisterAndCompileAsync( vmdl, files.Where( f => f != vmdl ) );
@@ -149,7 +156,7 @@ public sealed class SaveFlow
 		try
 		{
 			var files = VmdlSaveService.Export( folder, _session.ModelAsset.Path, _session.Rig,
-				new[] { (clip.EffectiveSequenceName, clip, FinalFrames( clip )) } );
+				new[] { (clip.EffectiveSequenceName, clip, FinalFrames( clip )) }, RootCompensation );
 			_session.SetStatus( $"Exported {string.Join( ", ", files.Select( Path.GetFileName ) )} to {folder}.", UI.Tone.Accent );
 		}
 		catch ( Exception e )
@@ -157,4 +164,8 @@ public sealed class SaveFlow
 			_session.SetStatus( $"Export failed: {e.Message}", UI.Tone.Red );
 		}
 	}
+
+	/// <summary>The root compensation measured for this model (null until a save measured one).</summary>
+	System.Numerics.Quaternion? RootCompensation => _session.Workspace?.RootCompensation is { Length: 4 } c
+		? new System.Numerics.Quaternion( c[0], c[1], c[2], c[3] ) : null;
 }

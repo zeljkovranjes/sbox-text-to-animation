@@ -24,6 +24,10 @@ public sealed class SaveResult
 	/// <summary>Largest difference (inches) between the compiled sequence and the clip, per sequence.</summary>
 	public Dictionary<string, float> PlaybackError { get; } = new( StringComparer.Ordinal );
 	public bool RolledBack { get; set; }
+	/// <summary>Largest root rotation difference (degrees) between the compiled sequences and the clips.</summary>
+	public float RootRotationError { get; set; }
+	/// <summary>The root compensation this model needs, when the save measured a new one (store it with the workspace).</summary>
+	public System.Numerics.Quaternion? LearnedRootCompensation { get; set; }
 }
 
 /// <summary>
@@ -37,8 +41,11 @@ public static class VmdlSaveService
 	/// <summary>Max acceptable joint difference (inches, root-relative) between the compiled clip and the editor clip.</summary>
 	public const float PlaybackTolerance = 0.75f;
 
+	/// <summary>Max acceptable root rotation difference (degrees) between the compiled clip and the editor clip.</summary>
+	public const float RootRotationTolerance = 3f;
+
 	public static async Task<SaveResult> SaveAsync( Asset modelAsset, MotionRig rig, IReadOnlyList<ClipSaveRequest> requests,
-		Action<string> status, CancellationToken token )
+		Action<string> status, CancellationToken token, System.Numerics.Quaternion? rootCompensation = null )
 	{
 		var result = new SaveResult();
 		await EngineThread.SwitchToMainThread();
@@ -61,20 +68,48 @@ public static class VmdlSaveService
 			return result;
 		}
 
-		status?.Invoke( "Preparing animation files…" );
 		var original = File.ReadAllText( vmdl );
+		result.BackupPath = Backup( vmdl, original );
+		var compensation = rootCompensation ?? ClipVmdlWriter.DefaultRootCompensation;
+		var attempt = await WriteCompileVerifyAsync( result, modelAsset, rig, requests, vmdl, assetsRoot, original, compensation, status, token );
+		if ( attempt is { } offset )
+		{
+			// the compiled root turned by a constant rotation: this model's source wants a different root compensation
+			// (it depends on how the file was authored). Rewrite once with the measured one.
+			var corrected = MathQ.Normalize( compensation * System.Numerics.Quaternion.Conjugate( offset ) );
+			status?.Invoke( "Adjusting to this model's orientation and compiling again…" );
+			result.Errors.Clear();
+			result.PlaybackError.Clear();
+			attempt = await WriteCompileVerifyAsync( result, modelAsset, rig, requests, vmdl, assetsRoot, original, corrected, status, token );
+			if ( result.Success ) result.LearnedRootCompensation = corrected;
+			else if ( attempt is not null )
+				result.Errors.Add( $"The saved animation plays turned by {result.RootRotationError:0} degrees on this model." );
+		}
+		if ( !result.Success && !result.RolledBack ) await RollBackAsync( result, vmdl, original, status );
+		return result;
+	}
+
+	/// <summary>
+	/// Writes the DMX files and the vmdl with <paramref name="compensation"/>, compiles, and checks every sequence
+	/// plays back like its clip. Returns the root rotation offset when the only problem is a constant root turn
+	/// (so the caller can retry with a corrected compensation); null otherwise (see <paramref name="result"/>).
+	/// </summary>
+	static async Task<System.Numerics.Quaternion?> WriteCompileVerifyAsync( SaveResult result, Asset modelAsset, MotionRig rig,
+		IReadOnlyList<ClipSaveRequest> requests, string vmdl, string assetsRoot, string original, System.Numerics.Quaternion compensation,
+		Action<string> status, CancellationToken token )
+	{
+		status?.Invoke( "Preparing animation files…" );
 		VmdlSavePlan plan;
-		try { plan = ClipVmdlWriter.Plan( original, modelAsset.Path, rig, requests ); }
+		try { plan = ClipVmdlWriter.Plan( original, modelAsset.Path, rig, requests, compensation ); }
 		catch ( Exception e ) when ( e is InvalidOperationException or FormatException or VmdlAugmentException or ArgumentException )
 		{
 			result.Errors.Add( e is VmdlAugmentException augment ? $"Name collision: {string.Join( ", ", augment.Collisions )}" : e.Message );
-			return result;
+			return null;
 		}
-		result.Notes.AddRange( plan.Notes );
+		foreach ( var note in plan.Notes ) if ( !result.Notes.Contains( note ) ) result.Notes.Add( note );
 		token.ThrowIfCancellationRequested();
 
-		// ---- backup (kept forever, one per save), then DMX files, then the vmdl LAST
-		result.BackupPath = Backup( vmdl, original );
+		// ---- DMX files, then the vmdl LAST (the backup was taken by the caller)
 		var written = new List<string>();
 		try
 		{
@@ -91,7 +126,7 @@ public static class VmdlSaveService
 		{
 			result.Errors.Add( $"Writing files failed: {e.Message}" );
 			TryRestore( vmdl, original );
-			return result;
+			return null;
 		}
 
 		status?.Invoke( $"Compiling {Path.GetFileName( vmdl )}…" );
@@ -99,8 +134,7 @@ public static class VmdlSaveService
 		if ( !compile.Compiled )
 		{
 			result.Errors.Add( compile.Error );
-			await RollBackAsync( result, vmdl, original, status );
-			return result;
+			return null;
 		}
 
 		status?.Invoke( "Checking the saved animations play back correctly…" );
@@ -108,34 +142,66 @@ public static class VmdlSaveService
 		if ( model is null )
 		{
 			result.Errors.Add( "The model compiled but its new sequences didn't appear." );
-			await RollBackAsync( result, vmdl, original, status );
-			return result;
+			return null;
 		}
+		var offsets = new List<System.Numerics.Quaternion>();
 		foreach ( var (sequence, expected) in plan.Expected )
 		{
 			token.ThrowIfCancellationRequested();
 			var fps = requests.FirstOrDefault( r => r.SequenceName == sequence )?.Clip.Fps ?? 30f;
 			var (frames, _) = await ModelBridge.SampleSequenceAsync( model, sequence, rig.Skeleton, fps, token );
 			result.PlaybackError[sequence] = Compare( rig, expected, frames );
+			if ( RootOffset( rig, expected, frames ) is { } o ) offsets.Add( o );
 		}
+		var rootError = offsets.Count == 0 ? 0f : offsets.Max( o => MathQ.AngleBetween( o, System.Numerics.Quaternion.Identity ) ) * 180f / MathF.PI;
+		result.RootRotationError = rootError;
 		var bad = result.PlaybackError.Where( kv => kv.Value > PlaybackTolerance ).ToList();
-		if ( bad.Count > 0 )
+		if ( bad.Count == 0 && rootError <= RootRotationTolerance )
 		{
-			foreach ( var (seq, error) in bad )
-				result.Errors.Add( $"\"{seq}\" plays back {error:0.0} in away from the edited clip after compiling." );
-			await RollBackAsync( result, vmdl, original, status );
-			return result;
+			result.Success = true;
+			return null;
 		}
+		foreach ( var (seq, error) in bad )
+			result.Errors.Add( $"\"{seq}\" plays back {error:0.0} in away from the edited clip after compiling." );
+		// a constant turn of the whole root (same for every sequence) is a compensation problem we can fix
+		if ( bad.Count == 0 && offsets.Count > 0 && offsets.All( o => MathQ.AngleBetween( o, offsets[0] ) * 180f / MathF.PI < 2f ) )
+			return offsets[0];
+		if ( rootError > RootRotationTolerance )
+			result.Errors.Add( $"The saved animation plays turned by {rootError:0} degrees." );
+		return null;
+	}
 
-		result.Success = true;
-		return result;
+	/// <summary>
+	/// The constant rotation between the compiled root and the clip's root (model space), averaged over sampled
+	/// frames; null when it isn't constant (then it isn't a compensation problem).
+	/// </summary>
+	public static System.Numerics.Quaternion? RootOffset( MotionRig rig, IReadOnlyList<XForm[]> expected, IReadOnlyList<XForm[]> actual )
+	{
+		var count = Math.Min( expected.Count, actual.Count );
+		if ( count == 0 ) return null;
+		var root = rig.RootIndex;
+		var we = new XForm[rig.Skeleton.Count];
+		var wa = new XForm[rig.Skeleton.Count];
+		var samples = new List<System.Numerics.Quaternion>();
+		var step = Math.Max( 1, count / 12 );
+		for ( var f = 0; f < count; f += step )
+		{
+			FkUtil.ToWorld( expected[f], rig.Skeleton, we );
+			FkUtil.ToWorld( actual[(int)MathF.Round( f * (actual.Count - 1f) / Math.Max( 1, expected.Count - 1 ) )], rig.Skeleton, wa );
+			var d = MathQ.Normalize( wa[root].Rot * System.Numerics.Quaternion.Conjugate( we[root].Rot ) );
+			if ( samples.Count > 0 && System.Numerics.Quaternion.Dot( d, samples[0] ) < 0 ) d = -d;
+			samples.Add( d );
+		}
+		var mean = MathQ.Normalize( samples.Aggregate( new System.Numerics.Quaternion( 0, 0, 0, 0 ), ( a, q ) => a + q ) );
+		return samples.All( q => MathQ.AngleBetween( q, mean ) * 180f / MathF.PI < 2f ) ? mean : null;
 	}
 
 	/// <summary>
 	/// Writes the clips as DMX files (engine units, Z-up) into <paramref name="folder"/>, plus - when the folder is
 	/// inside an Assets folder - a small vmdl that inherits the model and lists them, ready to use.
 	/// </summary>
-	public static List<string> Export( string folder, string modelAssetPath, MotionRig rig, IReadOnlyList<(string Sequence, AnimClip Clip, List<XForm[]> Frames)> clips )
+	public static List<string> Export( string folder, string modelAssetPath, MotionRig rig, IReadOnlyList<(string Sequence, AnimClip Clip, List<XForm[]> Frames)> clips,
+		System.Numerics.Quaternion? rootCompensation = null )
 	{
 		Directory.CreateDirectory( folder );
 		var files = new List<string>();
@@ -143,7 +209,7 @@ public static class VmdlSaveService
 		foreach ( var (sequence, clip, frames) in clips )
 		{
 			var path = Path.Combine( folder, sequence + ".dmx" );
-			File.WriteAllText( path, ClipVmdlWriter.BuildDmx( rig, frames, clip.Fps, clip.Looping, sequence, 1f ) );
+			File.WriteAllText( path, ClipVmdlWriter.BuildDmx( rig, frames, clip.Fps, clip.Looping, sequence, 1f, rootCompensation ) );
 			files.Add( path );
 			entries.Add( new AnimEntry
 			{

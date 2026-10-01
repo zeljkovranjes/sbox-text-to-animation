@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -100,8 +101,61 @@ public static class StarterModels
 		var scale = 0.3937f * FbxUnitScaleCm( bytes );
 		var text = Vmdl.VmdlWriter.GenerateStandalone( "", Array.Empty<Vmdl.AnimEntry>(), scale, "",
 			meshFilePath: relative, materialRemaps: remaps );
+		text = KeepAllBones( text, FbxBoneNames( bytes ) );
 		File.WriteAllText( vmdlPath, text );
 		return VmdlCompiler.RegisterAndCompileAsync( vmdlPath, new[] { fbxDest } );
+	}
+
+	/// <summary>The skeleton bones (LimbNode / Null joints) an FBX declares, by name.</summary>
+	public static List<string> FbxBoneNames( byte[] fbx )
+	{
+		var names = new List<string>();
+		try
+		{
+			var objects = Formats.Fbx.FbxTokenizer.Parse( fbx ).Child( "Objects" );
+			foreach ( var model in objects?.ChildrenNamed( "Model" ) ?? Enumerable.Empty<Formats.Fbx.FbxNode>() )
+			{
+				if ( model.Properties.Count < 3 || model.Properties[1] is not string raw || model.Properties[2] is not string kind ) continue;
+				if ( kind != "LimbNode" && kind != "Root" ) continue;
+				names.Add( Formats.Fbx.FbxNode.SplitName( raw ).Name );
+			}
+		}
+		catch { }
+		return names;
+	}
+
+	/// <summary>
+	/// Marks every bone "do not discard" (like the Citizen's bone markup): ModelDoc otherwise drops bones no vertex
+	/// is weighted to - often the top bone - which splits the skeleton into separate trees (a shark whose head stays
+	/// behind while its body swims away). Bone names are written as the engine stores them too ('.' becomes '_').
+	/// </summary>
+	public static string KeepAllBones( string vmdlText, IReadOnlyCollection<string> bones )
+	{
+		if ( bones.Count == 0 ) return vmdlText;
+		var doc = Vmdl.Kv3.Parse( vmdlText );
+		if ( doc.Root is not Vmdl.KvObject root || root.GetOrNull( "rootNode" ) is not Vmdl.KvObject rootNode
+			|| rootNode.GetOrNull( "children" ) is not Vmdl.KvArray children ) return vmdlText;
+		var list = children.Items.OfType<Vmdl.KvObject>().FirstOrDefault( n => n.GetString( "_class" ) == "BoneMarkupList" );
+		if ( list is null )
+		{
+			list = new Vmdl.KvObject { ["_class"] = new Vmdl.KvString( "BoneMarkupList" ), ["children"] = new Vmdl.KvArray(), ["bone_cull_type"] = new Vmdl.KvString( "None" ) };
+			children.Items.Add( list );
+		}
+		if ( list.GetOrNull( "children" ) is not Vmdl.KvArray markups ) return vmdlText;
+		var names = bones.SelectMany( n => new[] { n, string.Concat( n.Select( c => char.IsLetterOrDigit( c ) || c == '_' ? c : '_' ) ) } )
+			.Distinct( StringComparer.Ordinal );
+		foreach ( var name in names )
+		{
+			markups.Items.Add( new Vmdl.KvObject
+			{
+				["_class"] = new Vmdl.KvString( "BoneMarkup" ),
+				["target_bone"] = new Vmdl.KvString( name ),
+				["ignore_Translation"] = new Vmdl.KvBool( false ),
+				["ignore_rotation"] = new Vmdl.KvBool( false ),
+				["do_not_discard"] = new Vmdl.KvBool( true ),
+			} );
+		}
+		return Vmdl.Kv3.Serialize( doc );
 	}
 
 	/// <summary>Centimetres per FBX unit (GlobalSettings UnitScaleFactor; 1 = cm, 100 = m). 1 when absent.</summary>

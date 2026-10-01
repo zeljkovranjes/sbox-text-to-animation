@@ -38,6 +38,10 @@ public sealed class UniMateRig
 	/// <summary>The workspace bone carrying the root trajectory (UniMate joint 0, the hips).</summary>
 	public int RootBone => Bone[0];
 
+	/// <summary>The workspace bones UniMate animates (every model joint that is a real bone).</summary>
+	public IReadOnlySet<int> AnimatedBones => _animated ??= Bone.Where( b => b >= 0 ).ToHashSet();
+	HashSet<int> _animated;
+
 	UniMateRig( MotionRig motion, UniMateSkeleton skeleton, int[] bone, Vector3[] tipLocal, RigFamily family )
 	{
 		Motion = motion;
@@ -291,18 +295,37 @@ public sealed class UniMateRig
 		var rootBone = RootBone;
 		var result = new List<XForm[]>( T );
 		var world = new XForm[s.Count];
+		// the bones above the root joint (a rig's top "root" bone) travel with the body as one rigid block: the top
+		// bone takes the root joint's translation and heading (keeping its rest tilt), the ones below it keep their
+		// rest offsets - frozen at rest, anything hanging off them would be left behind
+		var ancestors = new HashSet<int>();
+		for ( var a = rootBone >= 0 ? s[rootBone].ParentIndex : -1; a >= 0; a = s[a].ParentIndex ) ancestors.Add( a );
+		var restWorld = s.RestWorld;
+		var up = Motion.Up;
 		for ( var t = 0; t < T; t++ )
 		{
 			Array.Clear( desiredWorld );
 			for ( var j = 0; j < Count; j++ ) if ( Bone[j] >= 0 ) desiredWorld[Bone[j]] = motion.WorldRot[t, j];
 			var src = baseFrames is { Count: > 0 } ? baseFrames[Math.Min( t, baseFrames.Count - 1 )] : null;
 			var frame = new XForm[s.Count];
+			var carry = Quaternion.Identity;
+			if ( ancestors.Count > 0 && desiredWorld[rootBone] is { } rootRot )
+			{
+				MathQ.SwingTwist( Quaternion.Normalize( rootRot * Quaternion.Conjugate( restWorld[rootBone].Rot ) ), up, out _, out carry );
+			}
 			for ( var b = 0; b < s.Count; b++ )
 			{
 				var local = src?[b] ?? s[b].RestLocal;
 				var parent = s[b].ParentIndex;
 				var parentWorld = parent < 0 ? XForm.Identity : world[parent];
-				if ( desiredWorld[b] is { } g )
+				if ( ancestors.Contains( b ) && parent < 0 )
+				{
+					var wantRot = Quaternion.Normalize( carry * restWorld[b].Rot );
+					var wantPos = motion.RootPos[t] + Vector3.Transform( restWorld[b].Pos - restWorld[rootBone].Pos, carry );
+					var w = new XForm( wantPos, wantRot );
+					local = parent < 0 ? w : XForm.ToLocal( parentWorld, w );
+				}
+				else if ( desiredWorld[b] is { } g )
 				{
 					var pos = local.Pos;
 					if ( b == rootBone )

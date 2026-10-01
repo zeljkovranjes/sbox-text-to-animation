@@ -114,6 +114,13 @@ public static class EditorGate
 		var window = TextToAnimationWindow.Open();
 		await EngineThread.DelayOnMain( 500 );
 		Check( "start page shows first", window.ShowsStartPage && !window.Session.HasModel );
+		if ( Environment.GetEnvironmentVariable( "T2A_GATE_ONLY_CREATURES" ) == "1" )
+		{
+			var onlyShots = Path.Combine( Path.GetDirectoryName( _resultPath )!, "gate_shots" );
+			Directory.CreateDirectory( onlyShots );
+			await RunCreatureChecksAsync( window, assets, onlyShots, Check );
+			return checks.Values.All( v => v );
+		}
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" ) await EngineThread.DelayOnMain( 5000 );
 		var folder = Path.Combine( assets, "t2a_gate" );
 		Directory.CreateDirectory( folder );
@@ -554,6 +561,8 @@ public static class EditorGate
 				limbs = a.Limbs.Select( l => $"{l.Kind} {l.Side}: {l.Chain.Count}" ).ToList(), problems = rig.Problems.ToList(),
 			};
 			Set( "creatures", report );
+			var dumpModel = session.Model;
+			_bindScaleOf = n => dumpModel.Bones.GetBone( n ) is { } bb ? new[] { bb.LocalTransform.Scale.x, bb.LocalTransform.Scale.y, bb.LocalTransform.Scale.z } : null;
 			DumpSkeleton( rig, Path.Combine( shots, $"creature_{creature.Name}_skeleton.json" ) );
 			var problems = UniMateRigProblems( rig );
 			check( $"{creature.Name}: skeleton read for generation", rig.Skeleton.Count > 4 && problems.Count == 0, $"{rig.Skeleton.Count} bones; {string.Join( " ", problems )}" );
@@ -586,6 +595,16 @@ public static class EditorGate
 			var errors = made.SelectMany( c => ClipQuality.Analyze( c, rig ) ).Where( q => q.Severity == IssueSeverity.Error ).Select( q => q.Code ).ToList();
 			check( $"{creature.Name}: generated animations have no quality errors", errors.Count == 0, string.Join( ",", errors ) );
 
+			session.SelectClip( made[0] );
+			window.Viewport.FrameCharacter();
+			window.Viewport.SetView( 90f, 8f );
+			foreach ( var f in Enumerable.Range( 0, 6 ).Select( k => k * (made[0].FrameCount - 1) / 5 ) )
+			{
+				session.Playing = false;
+				session.Seek( f );
+				await EngineThread.DelayOnMain( 350 );
+				File.WriteAllBytes( Path.Combine( shots, $"creature_{creature.Name}_preview_{f:00}.png" ), window.Viewport.RenderToPng() );
+			}
 			var savedAll = true;
 			foreach ( var clip in made )
 			{
@@ -604,6 +623,28 @@ public static class EditorGate
 			// the compiled animation as the engine plays it (sampled back from the model) for review
 			var played = await session.ImportSequenceAsync( names[0] );
 			await EngineThread.SwitchToMainThread();
+			{
+				// how do the sampled rotations differ from what we wrote? (local and world, per bone)
+				var ours = made[0].EvaluateFrames( rig.Skeleton );
+				var theirs = played.Frames;
+				var fr = Math.Min( 10, Math.Min( ours.Count, theirs.Count ) - 1 );
+				var wo = new Maths.XForm[rig.Skeleton.Count]; var wt = new Maths.XForm[rig.Skeleton.Count];
+				Processing.FkUtil.ToWorld( ours[fr], rig.Skeleton, wo );
+				Processing.FkUtil.ToWorld( theirs[fr], rig.Skeleton, wt );
+				var rows = new List<string>();
+				for ( var b = 0; b < rig.Skeleton.Count; b++ )
+				{
+					var dl = Maths.MathQ.AngleBetween( ours[fr][b].Rot, theirs[fr][b].Rot ) * 180f / MathF.PI;
+					var dw = Maths.MathQ.AngleBetween( wo[b].Rot, wt[b].Rot ) * 180f / MathF.PI;
+					var dp = (wo[b].Pos - wt[b].Pos).Length();
+					var rest = Maths.MathQ.AngleBetween( rig.Skeleton[b].RestLocal.Rot, theirs[fr][b].Rot ) * 180f / MathF.PI;
+					rows.Add( $"{rig.Skeleton[b].Name}: local {dl:0.0} world {dw:0.0} pos {dp:0.00} | sampled-vs-rest {rest:0.0}" );
+				}
+				Set( $"rotdiff_{creature.Name}", rows );
+			}
+			var turn = VmdlSaveService.RootOffset( rig, made[0].EvaluateFrames( rig.Skeleton ), played.Frames ) is { } off
+				? Maths.MathQ.AngleBetween( off, System.Numerics.Quaternion.Identity ) * 180f / MathF.PI : 999f;
+			check( $"{creature.Name}: the game plays it facing the way it was made", turn < 3f, $"{turn:0.0}° off; learned compensation {(session.Workspace.RootCompensation is { } rc ? string.Join( ",", rc.Select( v => v.ToString( "0.###" ) ) ) : "none")}" );
 			session.SelectClip( played );
 			window.Viewport.FrameCharacter();
 			window.Viewport.SetView( 90f, 8f ); // side on: gaits read best from the side
@@ -615,6 +656,16 @@ public static class EditorGate
 				await EngineThread.DelayOnMain( 350 );
 				File.WriteAllBytes( Path.Combine( shots, $"creature_{creature.Name}_played_{f:00}.png" ), window.Viewport.RenderToPng() );
 			}
+			// the same frames played by the engine itself, no overrides: what the game shows
+			window.Viewport.EngineSequence = names[0];
+			foreach ( var f in Enumerable.Range( 0, 6 ).Select( k => k * (played.FrameCount - 1) / 5 ) )
+			{
+				session.Playing = false;
+				session.Seek( f );
+				await EngineThread.DelayOnMain( 350 );
+				File.WriteAllBytes( Path.Combine( shots, $"creature_{creature.Name}_engine_{f:00}.png" ), window.Viewport.RenderToPng() );
+			}
+			window.Viewport.EngineSequence = null;
 		}
 	}
 
@@ -647,6 +698,9 @@ public static class EditorGate
 		catch ( Exception e ) { return new List<string> { e.Message }; }
 	}
 
+	static Func<string, float[]> _bindScaleOf = _ => null;
+	static float[] BindScale( string bone ) => _bindScaleOf( bone );
+
 	/// <summary>Writes the engine skeleton (rest locals) and what the shape analysis made of it, for offline tests.</summary>
 	static void DumpSkeleton( MotionRig rig, string path )
 	{
@@ -661,6 +715,7 @@ public static class EditorGate
 					name = s[i].Name, parent = s[i].ParentIndex,
 					pos = new[] { s[i].RestLocal.Pos.X, s[i].RestLocal.Pos.Y, s[i].RestLocal.Pos.Z },
 					rot = new[] { s[i].RestLocal.Rot.X, s[i].RestLocal.Rot.Y, s[i].RestLocal.Rot.Z, s[i].RestLocal.Rot.W },
+					scale = BindScale( s[i].Name ),
 				} ).ToList(),
 				analysis = new
 				{

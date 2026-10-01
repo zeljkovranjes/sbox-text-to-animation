@@ -56,8 +56,18 @@ public static class ClipVmdlWriter
     /// </summary>
     public static float RootYawCompensationDegrees { get; set; } = 90f;
 
-    public static VmdlSavePlan Plan(string vmdlText, string vmdlAssetPath, MotionRig rig, IReadOnlyList<ClipSaveRequest> requests)
+    /// <summary>The compensation when nothing was measured for a model yet: the Citizen's +90° yaw.</summary>
+    public static Quaternion DefaultRootCompensation => Quaternion.CreateFromAxisAngle(Vector3.UnitZ, RootYawCompensationDegrees * MathF.PI / 180f);
+
+    /// <param name="rootCompensation">
+    /// Rotation applied to the root bone in the written DMX so the compiled model plays the clip as edited. It
+    /// depends on how the model's source was authored (the Citizen's FBX needs +90° yaw, a Blender FBX none);
+    /// the save measures it on the first save of a model and stores it with the workspace.
+    /// </param>
+    public static VmdlSavePlan Plan(string vmdlText, string vmdlAssetPath, MotionRig rig, IReadOnlyList<ClipSaveRequest> requests,
+        Quaternion? rootCompensation = null)
     {
+        var compensation = rootCompensation ?? DefaultRootCompensation;
         var doc = Kv3.Parse(vmdlText);
         if (doc.Root is not KvObject root || root.GetOrNull("rootNode") is not KvObject rootNode)
             throw new FormatException("The vmdl has no rootNode.");
@@ -87,7 +97,7 @@ public static class ClipVmdlWriter
 
             var frames = request.Frames;
             var dmxPath = $"{dmxFolder}/{seq}.dmx";
-            plan.Files.Add(new OutputFile(dmxPath, BuildDmx(rig, frames, clip.Fps, clip.Looping, seq, scale)));
+            plan.Files.Add(new OutputFile(dmxPath, BuildDmx(rig, frames, clip.Fps, clip.Looping, seq, scale, compensation)));
             plan.Expected[seq] = frames;
             plan.Sequences.Add(seq);
 
@@ -122,7 +132,7 @@ public static class ClipVmdlWriter
                 {
                     var mirrorName = Unique(seq + "_mirror", existing.Keys, plan.Sequences);
                     var mirrorPath = $"{dmxFolder}/{mirrorName}.dmx";
-                    plan.Files.Add(new OutputFile(mirrorPath, BuildDmx(rig, mirroredFrames, clip.Fps, clip.Looping, mirrorName, scale)));
+                    plan.Files.Add(new OutputFile(mirrorPath, BuildDmx(rig, mirroredFrames, clip.Fps, clip.Looping, mirrorName, scale, compensation)));
                     newEntries.Add(new AnimEntry
                     {
                         Name = mirrorName, SourceFilename = mirrorPath, Looping = clip.Looping,
@@ -152,10 +162,11 @@ public static class ClipVmdlWriter
     }
 
     /// <summary>A DMX of the frames in the model's source units with root yaw compensation.</summary>
-    public static string BuildDmx(MotionRig rig, IReadOnlyList<XForm[]> frames, float fps, bool looping, string name, float modelScale)
+    public static string BuildDmx(MotionRig rig, IReadOnlyList<XForm[]> frames, float fps, bool looping, string name, float modelScale,
+        Quaternion? rootCompensation = null)
     {
         var inv = modelScale > 0f ? 1f / modelScale : 1f;
-        var yaw = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, RootYawCompensationDegrees * MathF.PI / 180f);
+        var yaw = MathQ.Normalize(rootCompensation ?? DefaultRootCompensation);
         var skeleton = rig.Skeleton;
         XForm Convert(XForm x, bool isRoot)
         {

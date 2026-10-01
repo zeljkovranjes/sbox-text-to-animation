@@ -140,8 +140,10 @@ public sealed class UniMateGenerator : IMotionGenerator
 					throw new NotSupportedException( $"{request.Mode} is not supported." );
 			}
 
-			// derived bones: twist helpers follow their limbs
-			TwistBoneFollow.Apply( frames, rig.Rig, null );
+			// derived bones: twist helpers follow their limbs. Bones UniMate animates are excluded - they already
+			// carry generated motion, and re-deriving them (the retargeter's "inline" follow) would override it and
+			// stretch the bones below them
+			TwistBoneFollow.Apply( frames, rig.Rig, uniRig.AnimatedBones );
 			// back to the workspace frame rate
 			var output = Resample( frames, UniMateModel.Fps, request.OutputFps );
 			EnforceConstraints( output, request );
