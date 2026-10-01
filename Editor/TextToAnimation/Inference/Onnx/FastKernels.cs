@@ -49,6 +49,15 @@ public static unsafe class FastKernels
 		return new PackedMatrix { K = K, N = N, Panels = panels, Nr = nr, Data = data };
 	}
 
+	[ThreadStatic] static float[] _packedA, _acc, _biasPad, _scores;
+
+	/// <summary>A per-thread scratch buffer of at least <paramref name="n"/> floats (contents undefined).</summary>
+	static float[] Scratch( ref float[] slot, int n )
+	{
+		if ( slot is null || slot.Length < n ) slot = GC.AllocateUninitializedArray<float>( n );
+		return slot;
+	}
+
 	/// <summary>C[M,N] = A[M,K] · B (packed). A rows are packed per chunk into [k][MR] micro-panels.</summary>
 	public static void Gemm( float[] a, int aOffset, int M, PackedMatrix b, float[] c, int cOffset, ExecContext ctx, float[] bias = null )
 	{
@@ -61,7 +70,7 @@ public static unsafe class FastKernels
 			var r0 = ci * chunkRows;
 			var r1 = Math.Min( M, r0 + chunkRows );
 			var blocks = (r1 - r0 + mr - 1) / mr;
-			var packedA = new float[blocks * K * mr];
+			var packedA = Scratch( ref _packedA, blocks * K * mr );
 			for ( var blk = 0; blk < blocks; blk++ )
 			{
 				var rows = Math.Min( mr, r1 - r0 - blk * mr );
@@ -72,8 +81,8 @@ public static unsafe class FastKernels
 					for ( var k = 0; k < K; k++ ) packedA[dst + k * mr + r] = a[src + k];
 				}
 			}
-			var acc = new float[mr * nr];
-			var biasPad = new float[nr];
+			var acc = Scratch( ref _acc, mr * nr );
+			var biasPad = Scratch( ref _biasPad, nr );
 			fixed ( float* pa = packedA, pb = b.Data, pc = c, pacc = acc, pbias = biasPad )
 			{
 				for ( var p = 0; p < b.Panels; p++ )
@@ -205,7 +214,7 @@ public static unsafe class FastKernels
 		int N = q.Shape[0], Hq = q.Shape[1], Sq = q.Shape[2], Dh = q.Shape[3];
 		int Hk = k.Shape[1], Sk = k.Shape[2], Dv = v.Shape[3];
 		var groups = Hq / Hk;
-		var output = new float[N * Hq * Sq * Dv];
+		var output = ExecContext.AllocZeroed( N * Hq * Sq * Dv );
 		var qf = q.F; var kf = k.F; var vf = v.F;
 		// mask strides over (n, h) with broadcasting
 		float[] mf = mask?.AsFloats();
@@ -227,7 +236,7 @@ public static unsafe class FastKernels
 			var vBase = (n * Hk + hk) * Sk * Dv;
 			var oBase = (n * Hq + h) * Sq * Dv;
 			var mBase = n * maskN + h * maskH;
-			var scores = new float[Sk];
+			var scores = Scratch( ref _scores, Sk );
 			for ( var i = 0; i < Sq; i++ )
 			{
 				var qs = qf.AsSpan( qBase + i * Dh, Dh );
@@ -280,7 +289,7 @@ public static unsafe class FastKernels
 		var norm = 1;
 		for ( var d = axis; d < x.Rank; d++ ) norm *= x.Shape[d];
 		var rows = x.Length / Math.Max( 1, norm );
-		var src = x.F; var r = new float[x.Length]; var g = scale.F;
+		var src = x.F; var r = ExecContext.Alloc( x.Length ); var g = scale.F;
 		void Row( int row )
 		{
 			var s = src.AsSpan( row * norm, norm );
@@ -314,7 +323,7 @@ public static unsafe class FastKernels
 		var outer = t.Length / Math.Max( 1, run );
 		var src = perm.Take( rank - 1 ).Select( i => inStrides[i] ).ToArray();
 		var dims = outShape.Take( rank - 1 ).ToArray();
-		float[] f = t.IsFloat ? new float[t.Length] : null;
+		float[] f = t.IsFloat ? ExecContext.Alloc( t.Length ) : null;
 		long[] l = t.IsInt ? new long[t.Length] : null;
 		var offsets = new int[outer];
 		{
@@ -356,7 +365,7 @@ public static unsafe class FastKernels
 		var run = len * inner;
 		if ( t.IsFloat )
 		{
-			var r = new float[outer * run];
+			var r = ExecContext.Alloc( outer * run );
 			for ( var o = 0; o < outer; o++ ) Array.Copy( t.F, (o * dim + start) * inner, r, o * run, run );
 			return Tensor.Float( shape, r );
 		}
@@ -407,7 +416,7 @@ public static unsafe class FastKernels
 		if ( inner < 8 ) return null;
 		var adFlag = ma != 2; var bdFlag = mb != 2;
 		var outer = Tensor.SizeOf( shape ) / inner;
-		var result = new float[outer * inner];
+		var result = ExecContext.Alloc( outer * inner );
 		var af = a.F; var bf = b.F;
 		var outerDims = shape.Take( split ).ToArray();
 		var oa = new int[outer]; var ob = new int[outer];
@@ -530,7 +539,7 @@ public static unsafe class FastKernels
 			throw new InvalidOperationException( "Rope cos/sin must have one row per position." );
 		var rows = x.Length / d;
 		var src = x.F; var cf = cos.F; var sf = sin.F;
-		var output = new float[x.Length];
+		var output = ExecContext.Alloc( x.Length );
 		var perm = map.Src; var sign = map.Sign;
 		void Row( int row )
 		{
@@ -575,7 +584,7 @@ public static unsafe class FastKernels
 		if ( inner < 8 ) return null;
 		var total = Tensor.SizeOf( shape );
 		var outer = total / inner;
-		var result = new float[total];
+		var result = ExecContext.Alloc( total );
 		var outerDims = shape.Take( split ).ToArray();
 		var offs = new int[3][];
 		for ( var k = 0; k < 3; k++ ) offs[k] = new int[outer];
@@ -621,7 +630,7 @@ public static unsafe class FastKernels
 	/// <summary>x * sigmoid(x).</summary>
 	public static Tensor SiLU( Tensor x, ExecContext ctx )
 	{
-		var src = x.F; var r = new float[src.Length];
+		var src = x.F; var r = ExecContext.Alloc( src.Length );
 		void Chunk( int c )
 		{
 			var end = Math.Min( src.Length, (c + 1) * 16384 );
@@ -635,7 +644,7 @@ public static unsafe class FastKernels
 	/// <summary>Vectorised logistic sigmoid.</summary>
 	public static Tensor Sigmoid( Tensor x, ExecContext ctx )
 	{
-		var src = x.F; var r = new float[src.Length];
+		var src = x.F; var r = ExecContext.Alloc( src.Length );
 		void Chunk( int c )
 		{
 			var end = Math.Min( src.Length, (c + 1) * 16384 );

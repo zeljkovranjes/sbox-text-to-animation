@@ -60,7 +60,24 @@ public sealed class OnnxSession
 		foreach ( var name in InputNames )
 			if ( !values.ContainsKey( name ) ) throw new ArgumentException( $"Missing model input \"{name}\"." );
 		var keep = new HashSet<string>( OutputNames, StringComparer.Ordinal );
-
+		// pooled buffers: how many live tensors use each one (views from Reshape & co share a buffer)
+		var refs = new Dictionary<float[], int>( ReferenceEqualityComparer.Instance );
+		var pool = _ctx.Pool;
+		void AddRef( Tensor t )
+		{
+			if ( t?.F is { Length: > 0 } f && pool.Owns( f ) ) refs[f] = refs.GetValueOrDefault( f ) + 1;
+		}
+		void DropRef( Tensor t )
+		{
+			if ( t?.F is not { Length: > 0 } f || !refs.TryGetValue( f, out var n ) ) return;
+			if ( --n > 0 ) { refs[f] = n; return; }
+			refs.Remove( f );
+			pool.Return( f );
+		}
+		var previous = ExecContext.Current;
+		ExecContext.Current = _ctx;
+		try
+		{
 		for ( var i = 0; i < _order.Count; i++ )
 		{
 			token.ThrowIfCancellationRequested();
@@ -86,15 +103,31 @@ public sealed class OnnxSession
 				Profile[node.OpType] = Profile.GetValueOrDefault( node.OpType ) + ms;
 			}
 			for ( var k = 0; k < node.Outputs.Length && k < outputs.Length; k++ )
-				if ( node.Outputs[k].Length > 0 ) values[node.Outputs[k]] = outputs[k];
-			// release values nobody needs any more
-			foreach ( var name in node.Inputs )
-				if ( name.Length > 0 && _lastUse.TryGetValue( name, out var last ) && last == i && !keep.Contains( name ) && !_constants.ContainsKey( name ) )
-					values.Remove( name );
+				if ( node.Outputs[k].Length > 0 )
+				{
+					values[node.Outputs[k]] = outputs[k];
+					AddRef( outputs[k] );
+				}
+				else DropRef( null );
+			// release values nobody needs any more (their pooled buffers go back for reuse)
+			foreach ( var name in node.Inputs.Distinct() )
+				if ( name.Length > 0 && _lastUse.TryGetValue( name, out var last ) && last == i && !keep.Contains( name ) && !_constants.ContainsKey( name )
+					&& values.Remove( name, out var dead ) )
+					DropRef( dead );
 			if ( progress is not null && (i & 15) == 0 ) progress( (i + 1f) / _order.Count );
 		}
 		progress?.Invoke( 1f );
-		return OutputNames.ToDictionary( n => n, n => values.TryGetValue( n, out var t ) ? t : throw new InvalidOperationException( $"Output \"{n}\" was not produced." ) );
+		var result = OutputNames.ToDictionary( n => n, n => values.TryGetValue( n, out var t ) ? t : throw new InvalidOperationException( $"Output \"{n}\" was not produced." ) );
+		// outputs now belong to the caller; anything else still pooled (unused outputs of multi-output nodes) is returned
+		var given = new HashSet<float[]>( result.Values.Where( t => t.F is not null ).Select( t => t.F ), ReferenceEqualityComparer.Instance );
+		foreach ( var f in refs.Keys.ToList() )
+		{
+			if ( given.Contains( f ) ) pool.Release( f );
+			else pool.Return( f );
+		}
+		return result;
+		}
+		finally { ExecContext.Current = previous; }
 	}
 
 	/// <summary>

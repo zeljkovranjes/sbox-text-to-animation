@@ -36,10 +36,12 @@ public class StepProfile
         };
         step.Run(feed);
         step.Profile = new Dictionary<string, double>();
+        var alloc0 = GC.GetTotalAllocatedBytes(true);
+        var gc0 = GC.CollectionCount(0); var gc2 = GC.CollectionCount(2);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         const int runs = 5;
         for (var r = 0; r < runs; r++) step.Run(feed);
-        _out.WriteLine($"B=2 step {sw.ElapsedMilliseconds / runs} ms");
+        _out.WriteLine($"B=2 step {sw.ElapsedMilliseconds / runs} ms, allocated {(GC.GetTotalAllocatedBytes(true) - alloc0) / runs / 1e6:0} MB/step, gc0 {(GC.CollectionCount(0) - gc0) / (float)runs:0.0}/step, gc2 {(GC.CollectionCount(2) - gc2) / (float)runs:0.0}/step");
         foreach (var kv in step.Profile.OrderByDescending(kv => kv.Value).Take(14)) _out.WriteLine($"  {kv.Key} {kv.Value / runs:0.0} ms");
     }
 }

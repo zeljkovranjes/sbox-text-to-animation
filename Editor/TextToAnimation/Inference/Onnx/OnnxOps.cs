@@ -15,6 +15,14 @@ public sealed class ExecContext
 	public readonly Dictionary<Tensor, FastKernels.PackedMatrix> Packed = new( ReferenceEqualityComparer.Instance );
 	/// <summary>Tensors that never change between runs (initializers).</summary>
 	public readonly HashSet<Tensor> Constants = new( ReferenceEqualityComparer.Instance );
+	/// <summary>Buffers of intermediate tensors, reused between nodes and runs.</summary>
+	public readonly TensorPool Pool = new();
+	/// <summary>The context of the run on this thread (kernels rent their outputs from its pool).</summary>
+	[ThreadStatic] public static ExecContext Current;
+	/// <summary>An output buffer with undefined contents: pooled while a session runs, fresh otherwise.</summary>
+	public static float[] Alloc( int n ) => Current?.Pool.Rent( n ) ?? new float[n];
+	/// <summary>A zero-filled output buffer.</summary>
+	public static float[] AllocZeroed( int n ) => Current?.Pool.RentZeroed( n ) ?? new float[n];
 	public int MaxThreads = Math.Max( 1, Environment.ProcessorCount - 1 );
 	public ParallelOptions Parallel => new() { MaxDegreeOfParallelism = MaxThreads };
 }
@@ -216,7 +224,7 @@ public static class OnnxOps
 		if ( a.IsInt && b.IsInt ) return BinaryInt( a, b, op );
 		var fa = a.AsFloats(); var fb = b.AsFloats();
 		var shape = BroadcastShape( a.Shape, b.Shape );
-		var result = new float[Tensor.SizeOf( shape )];
+		var result = ExecContext.AllocZeroed( Tensor.SizeOf( shape ) );
 		if ( a.Length == result.Length && b.Length == result.Length )
 		{
 			VecBinary( fa, 0, fb, 0, result, 0, result.Length, op, false );
@@ -386,7 +394,7 @@ public static class OnnxOps
 	static Tensor Unary( Tensor t, Func<float, float> f )
 	{
 		var src = t.AsFloats();
-		var r = new float[src.Length];
+		var r = ExecContext.Alloc( src.Length );
 		if ( r.Length > 65536 ) Parallel.For( 0, (r.Length + 8191) / 8192, chunk =>
 		{
 			var end = Math.Min( r.Length, (chunk + 1) * 8192 );
@@ -523,7 +531,7 @@ public static class OnnxOps
 		var innerOut = Tensor.SizeOf( shape ) / Math.Max( 1, outer );
 		var isFloat = parts.Any( p => p.IsFloat );
 		var isInt = !isFloat && parts.Any( p => p.IsInt );
-		var f = isFloat ? new float[Tensor.SizeOf( shape )] : null;
+		var f = isFloat ? ExecContext.AllocZeroed( Tensor.SizeOf( shape ) ) : null;
 		var l = isInt ? new long[Tensor.SizeOf( shape )] : null;
 		var bo = !isFloat && !isInt ? new bool[Tensor.SizeOf( shape )] : null;
 		var offset = 0;
@@ -740,7 +748,7 @@ public static class OnnxOps
 		var inner = t.Shape.Skip( axis + 1 ).Aggregate( 1, ( a, b ) => a * b );
 		var outer = t.Length / Math.Max( 1, dim * inner );
 		var src = t.AsFloats();
-		var r = new float[t.Length];
+		var r = ExecContext.AllocZeroed( t.Length );
 		for ( var o = 0; o < outer; o++ )
 			for ( var i = 0; i < inner; i++ )
 			{
@@ -839,7 +847,7 @@ public static class OnnxOps
 		var inner = t.Shape.Skip( axis + 1 ).Aggregate( 1, ( a, b ) => a * b );
 		var outer = t.Length / Math.Max( 1, dim * inner );
 		var src = t.F;
-		var r = new float[t.Length];
+		var r = ExecContext.AllocZeroed( t.Length );
 		void Row( int o, int i )
 		{
 			var max = float.NegativeInfinity;
@@ -861,7 +869,7 @@ public static class OnnxOps
 		if ( axis < 0 ) axis += x.Rank;
 		var norm = x.Shape.Skip( axis ).Aggregate( 1, ( a, b ) => a * b );
 		var rows = x.Length / Math.Max( 1, norm );
-		var src = x.F; var r = new float[x.Length];
+		var src = x.F; var r = ExecContext.Alloc( x.Length );
 		var g = scale.F; var b = bias?.F;
 		void Row( int row )
 		{
@@ -882,7 +890,7 @@ public static class OnnxOps
 		if ( axis < 0 ) axis += x.Rank;
 		var norm = x.Shape.Skip( axis ).Aggregate( 1, ( a, b ) => a * b );
 		var rows = x.Length / Math.Max( 1, norm );
-		var src = x.F; var r = new float[x.Length]; var g = scale.F;
+		var src = x.F; var r = ExecContext.Alloc( x.Length ); var g = scale.F;
 		Parallel.For( 0, rows, ctx.Parallel, row =>
 		{
 			var o = row * norm;
@@ -915,7 +923,7 @@ public static class OnnxOps
 				if ( !ctx.Packed.TryGetValue( b, out packed ) ) ctx.Packed[b] = packed = FastKernels.Pack( b.F, K, N );
 		}
 		else packed = FastKernels.Pack( b.F, K, N );
-		var c = new float[M * N];
+		var c = ExecContext.Alloc( M * N );
 		FastKernels.Gemm( a.F, 0, M, packed, c, 0, ctx, bias );
 		return Tensor.Float( a.Shape.Take( a.Rank - 1 ).Append( N ).ToArray(), c );
 	}
@@ -933,7 +941,7 @@ public static class OnnxOps
 		var batch = BroadcastShape( batchA, batchB );
 		var batches = Tensor.SizeOf( batch );
 		var outShape = batch.Concat( new[] { M, N } ).ToArray();
-		var c = new float[batches * M * N];
+		var c = ExecContext.AllocZeroed( batches * M * N );
 		var sa = BroadcastStrides( batchA, batch );
 		var sb = BroadcastStrides( batchB, batch );
 		var aOff = new int[batches]; var bOff = new int[batches];
@@ -991,7 +999,10 @@ public static class OnnxOps
 		{
 			if ( !ctx.TransposedCache.TryGetValue( b, out var bt ) )
 			{
-				ctx.TransposedCache[b] = bt = Transpose( b, new long[] { 1, 0 } );
+				{
+					ctx.TransposedCache[b] = bt = Transpose( b, new long[] { 1, 0 } );
+					ctx.Pool.Release( bt.F ); // cached across runs: never recycled
+				}
 				if ( ctx.Constants.Contains( b ) ) ctx.Constants.Add( bt );
 			}
 			b = bt;
