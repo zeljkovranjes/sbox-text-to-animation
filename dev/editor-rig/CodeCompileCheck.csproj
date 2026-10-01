@@ -1,0 +1,38 @@
+<!--
+  Offline compile check for Code/ (the runtime library assembly), mirroring the csproj the s&box editor
+  generates. Build with:  dotnet build dev/editor-rig/EditorCompileCheck.csproj
+  This is a fast pre-check only - the s&box gate (run_gate.ps1) is the authoritative compile (whitelist).
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <DefineConstants>SANDBOX</DefineConstants>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>TextToAnimation.CodeCompileCheck</AssemblyName>
+    <NoWarn>1701;1702;1591;8632;CS8632</NoWarn>
+    <SboxRoot Condition="'$(SboxRoot)' == ''">C:\Program Files (x86)\Steam\steamapps\common\sbox</SboxRoot>
+    <BaseIntermediateOutputPath>obj\code\</BaseIntermediateOutputPath>
+    <OutputPath>obj\out\code\</OutputPath>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="Sandbox.Internal.GlobalGameNamespace" Static="true" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\..\Code\**\*.cs" Exclude="..\..\Code\obj\**;..\..\Code\Properties\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="$(SboxRoot)\bin\managed\Sandbox.System.dll" />
+    <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Engine.dll" />
+    <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Filesystem.dll" />
+    <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Reflection.dll" />
+    <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Mounting.dll" />
+    <Reference Include="$(SboxRoot)\bin\managed\Sandbox.Event.dll" />
+    <Reference Include="$(SboxRoot)\bin\managed\Facepunch.ActionGraphs.dll" />
+    <Reference Include="$(SboxRoot)\bin\managed\Microsoft.AspNetCore.Components.dll" />
+    <Reference Include="$(SboxRoot)\.vs\output\Base Library.dll" />
+  </ItemGroup>
+</Project>
