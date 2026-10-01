@@ -210,9 +210,9 @@ public sealed class PromptComposer : Widget
 		}
 		menu.AddSeparator();
 		menu.AddHeading( "Quality" );
-		Choose( menu, "Fast (12 steps)", Options.Steps == 12, () => Options.Steps = 12 );
-		Choose( menu, "Standard (24 steps)", Options.Steps == 24, () => Options.Steps = 24 );
-		Choose( menu, "Best (40 steps)", Options.Steps == 40, () => Options.Steps = 40 );
+		Choose( menu, "Fast", Options.Steps == 12, () => Options.Steps = 12 );
+		Choose( menu, "Standard", Options.Steps == 24, () => Options.Steps = 24 );
+		Choose( menu, "Best (slowest)", Options.Steps == 40, () => Options.Steps = 40 );
 		menu.AddSeparator();
 		var advanced = menu.AddMenu( "Advanced", "more_horiz" );
 		advanced.AddHeading( "Prompt strength" );

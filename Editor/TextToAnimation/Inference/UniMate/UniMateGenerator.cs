@@ -203,9 +203,10 @@ public sealed class UniMateGenerator : IMotionGenerator
 				alignment = align;
 				known = UniMateFeatures.ToModel( feat, UniMateStats.For( uniRig.Family ), Window );
 			}
+			var (method, calls, shift) = Sampler( steps );
 			var settings = new SampleSettings
 			{
-				Steps = steps, Guidance = guidance, StartTime = startTime, Known = known, Keep = anyKeep ? keep : null,
+				Steps = calls, Method = method, TimeShift = shift, Guidance = guidance, StartTime = startTime, Known = known, Keep = anyKeep ? keep : null,
 			};
 			var windowIndex = w;
 			var x = _model.Sample( prep, embedding, noise, settings,
@@ -248,6 +249,19 @@ public sealed class UniMateGenerator : IMotionGenerator
 		if ( keepBones ) GenerationConstraints.RestoreBones( output, source, request.KeepBones );
 		if ( keepPins ) GenerationConstraints.RestorePins( output, source, request.KeepFrames.Select( f => (int)MathF.Round( f * scale ) ) );
 	}
+
+	/// <summary>
+	/// The integrator for a quality level (the requested Euler-equivalent step count). Measured against the
+	/// converged solution (dev/Tests/SolverStudy): Adams-Bashforth 2 on a grid crowded towards the clean end
+	/// (shift 0.5) is as accurate as Euler with a third fewer model calls - 8 calls beat Euler 12, 16 match
+	/// Euler 24. Higher levels keep Euler, which converges further.
+	/// </summary>
+	public static (Integrator Method, int Calls, float Shift) Sampler( int requestedSteps ) => requestedSteps switch
+	{
+		<= 12 => (Integrator.AdamsBashforth2, 8, 0.5f),
+		<= 24 => (Integrator.AdamsBashforth2, 16, 0.5f),
+		_ => (Integrator.Euler, requestedSteps, 1f),
+	};
 
 	static List<XForm[]> Resample( List<XForm[]> frames, float fromFps, float toFps )
 	{

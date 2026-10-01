@@ -23,7 +23,11 @@ public sealed class PreparedSkeleton
 	public required Dictionary<string, Tensor> Tensors { get; init; }
 }
 
-public enum Integrator { Euler, Heun }
+/// <summary>
+/// ODE integrators for the flow: Euler (1 model call per step, 1st order), Heun (2 calls, 2nd order) and
+/// Adams-Bashforth 2 (1 call per step, 2nd order: reuses the previous step's velocity).
+/// </summary>
+public enum Integrator { Euler, Heun, AdamsBashforth2 }
 
 /// <summary>Sampling settings.</summary>
 public sealed class SampleSettings
@@ -31,6 +35,11 @@ public sealed class SampleSettings
 	public int Steps { get; init; } = 24;
 	public float Guidance { get; init; } = 3f;
 	public Integrator Method { get; init; } = Integrator.Euler;
+	/// <summary>
+	/// Time-grid shift (1 = uniform). Above 1 the steps crowd towards the noisy start of the flow, where the
+	/// velocity changes fastest: t' = s t / (1 + (s - 1) t).
+	/// </summary>
+	public float TimeShift { get; init; } = 1f;
 	/// <summary>Start time of the flow (0 = pure noise; &gt;0 starts from a noised copy of <see cref="Known"/>: variations).</summary>
 	public float StartTime { get; init; }
 	/// <summary>Known normalised motion (J,12,T) for constraints / variations.</summary>
@@ -201,11 +210,22 @@ public sealed class UniMateModel
 				if ( keep[i] ) state[i] = (1 - t) * noise[i] + t * k[i];
 		}
 
-		var dt = (1f - t0) / steps;
+		// time grid from t0 to 1 (optionally shifted towards the start)
+		var grid = new float[steps + 1];
+		var shift = settings.TimeShift > 0f ? settings.TimeShift : 1f;
+		for ( var k = 0; k <= steps; k++ )
+		{
+			var u = (float)k / steps;
+			var w = shift == 1f ? u : shift * u / (1f + (shift - 1f) * u);
+			grid[k] = t0 + (1f - t0) * w;
+		}
+		float[] previousV = null;
+		var previousDt = 0f;
 		for ( var s = 0; s < steps; s++ )
 		{
 			token.ThrowIfCancellationRequested();
-			var t = t0 + s * dt;
+			var t = grid[s];
+			var dt = grid[s + 1] - t;
 			var v1 = Velocity( x, t );
 			if ( settings.Method == Integrator.Heun && s < steps - 1 )
 			{
@@ -215,10 +235,18 @@ public sealed class UniMateModel
 				var v2 = Velocity( xp, t + dt );
 				for ( var i = 0; i < n; i++ ) x[i] += dt * 0.5f * (v1[i] + v2[i]);
 			}
+			else if ( settings.Method == Integrator.AdamsBashforth2 && previousV is not null )
+			{
+				// variable-step AB2: extrapolate the velocity to the middle of the step from the last two
+				var r = dt / (2f * previousDt);
+				for ( var i = 0; i < n; i++ ) x[i] += dt * ((1f + r) * v1[i] - r * previousV[i]);
+			}
 			else
 			{
 				for ( var i = 0; i < n; i++ ) x[i] += dt * v1[i];
 			}
+			previousV = v1;
+			previousDt = dt;
 			Replace( x, t + dt );
 			progress?.Invoke( (s + 1f) / steps );
 		}
