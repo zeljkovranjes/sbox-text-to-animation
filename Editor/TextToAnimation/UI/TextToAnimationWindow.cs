@@ -70,6 +70,9 @@ public sealed class TextToAnimationWindow : Widget
 	TaButton _cancel;
 	string _lastProgress = "";
 	string _shownWork;
+	Widget _transportRow;
+	QuickStart _quickStart;
+	TaEmptyState _sideEmpty;
 
 	public TextToAnimationWindow( Widget parent ) : base( parent )
 	{
@@ -224,7 +227,8 @@ public sealed class TextToAnimationWindow : Widget
 		} ).OpenAbove( anchor );
 		_intentChip = _editPrompt.AddChip( PromptRequests.IntentName( _intent ), "bolt", ShowIntentMenu, "What the prompt does: change this animation, fill between pinned frames, variations, or a new animation" );
 		timelineCard.Layout.Add( new TaDivider( timelineCard ) );
-		var transport = timelineCard.Layout.AddRow();
+		_transportRow = timelineCard.Layout.Add( new Widget( timelineCard ) { Layout = Layout.Row() } );
+		var transport = _transportRow.Layout;
 		transport.Spacing = 4;
 		transport.Add( TaStyle.Icon( timelineCard, "first_page", () => Session.Seek( 0 ), "Go to start (Home)" ) );
 		transport.Add( TaStyle.Icon( timelineCard, "chevron_left", () => Step( -1 ), "Previous frame (Left)" ) );
@@ -242,6 +246,13 @@ public sealed class TextToAnimationWindow : Widget
 		transport.Add( TaStyle.Icon( timelineCard, "help_outline", () => { }, "Timeline: drag across the lanes, or click one point and Shift+click another, to highlight frames - then keep, delete, repeat or reverse them with the bar that appears. Drag the highlight edges to adjust; I/O set them at the playhead. Right click to split or trim at a frame. Double click the Pinned lane to pin a pose." ) );
 		_timeline = timelineCard.Layout.Add( new TimelineWidget( timelineCard, Session ) { FixedHeight = 84 } );
 		_timeline.BuildContextMenu = BuildTimelineMenu;
+		_quickStart = timelineCard.Layout.Add( new QuickStart( timelineCard, Session ) { FixedHeight = 84 + 30 } );
+		_quickStart.Picked = example =>
+		{
+			SetIntent( EditIntent.New );
+			_editPrompt.Text = example;
+			_editPrompt.FocusPrompt();
+		};
 
 		// right: the tools, full height
 		var side = body.AddColumn();
@@ -261,6 +272,7 @@ public sealed class TextToAnimationWindow : Widget
 		EditPanel = canvas.Layout.Add( new EditPanel( canvas, Session ) );
 		PosePanel = canvas.Layout.Add( new PosePanel( canvas, Session ) );
 		SavePanel = canvas.Layout.Add( new SavePanel( canvas, Session, Save ) { ReplaceExisting = ReplaceExisting, ExportFiles = ExportClip } );
+		_sideEmpty = canvas.Layout.Add( new TaEmptyState( canvas, "movie", "No animation open", "Pick an animation in the list, or describe a new one under the view. Its settings, pose tools and save options show up here." ) );
 		canvas.Layout.AddStretchCell();
 		_panels = new Widget[] { EditPanel, PosePanel, SavePanel };
 		ShowTab( 0 );
@@ -284,6 +296,15 @@ public sealed class TextToAnimationWindow : Widget
 	/// <summary>The editor's prompt.</summary>
 	public PromptComposer EditPrompt => _editPrompt;
 
+	/// <summary>True while the quick start (example prompts) shows in place of the timeline.</summary>
+	public bool ShowsQuickStart => _quickStart.Visible;
+
+	/// <summary>The example prompts shown while no animation is open.</summary>
+	public QuickStart QuickStart => _quickStart;
+
+	/// <summary>True while the side panel says no animation is open.</summary>
+	public bool ShowsSideEmptyState => _sideEmpty.Visible;
+
 	/// <summary>The timeline under the prompt.</summary>
 	public TimelineWidget Timeline => _timeline;
 
@@ -297,7 +318,9 @@ public sealed class TextToAnimationWindow : Widget
 	public void ShowTab( int index )
 	{
 		index = Math.Clamp( index, 0, _panels.Length - 1 );
-		for ( var i = 0; i < _panels.Length; i++ ) _panels[i].Visible = i == index;
+		var open = Session.ActiveClip is not null;
+		for ( var i = 0; i < _panels.Length; i++ ) _panels[i].Visible = open && i == index;
+		_sideEmpty.Visible = !open;
 		if ( _sideTabs.SelectedIndex != index ) _sideTabs.SelectedIndex = index;
 	}
 
@@ -674,6 +697,12 @@ public sealed class TextToAnimationWindow : Widget
 		_shownWork = working;
 		Viewport.Visible = hasModel && !showIndicator;
 		_cancel.Visible = Flow.Running;
+		// nothing open: the timeline gives way to what to do next
+		_transportRow.Visible = clip is not null;
+		_timeline.Visible = clip is not null;
+		_quickStart.Visible = clip is null && hasModel;
+		_quickStart.Enabled = !busy;
+		ShowTab( _sideTabs.SelectedIndex );
 		_clipTitle.Text = clip?.Name ?? (hasModel ? "No animation open" : "");
 		var pill = clip is null ? "" : clip.Origin switch
 		{

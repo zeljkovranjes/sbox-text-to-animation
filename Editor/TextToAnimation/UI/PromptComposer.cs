@@ -336,6 +336,11 @@ public sealed class ChipButton : Widget
 	readonly string _icon;
 	public Action Clicked { get; set; }
 
+	/// <summary>Draws the dropdown arrow (chips that open a menu); off for plain one-click chips.</summary>
+	public bool Arrow { get; set; } = true;
+
+	float ArrowRoom => Arrow ? 20 : 10;
+
 	public ChipButton( Widget parent, string text, string icon, Action clicked, string tooltip ) : base( parent )
 	{
 		_icon = icon;
@@ -353,7 +358,7 @@ public sealed class ChipButton : Widget
 		set
 		{
 			_text = value ?? "";
-			FixedWidth = MathF.Ceiling( 8 + 16 + 5 + _text.Length * 6.2f + 20 );
+			FixedWidth = MathF.Ceiling( 8 + 16 + 5 + _text.Length * 6.2f + ArrowRoom );
 			Update();
 		}
 	}
@@ -384,9 +389,10 @@ public sealed class ChipButton : Widget
 		Paint.SetDefaultFont( 8 );
 		Paint.SetPen( Enabled ? Theme.Text : Theme.TextDisabled );
 		var textWidth = Paint.MeasureText( _text ).x;
-		var wanted = MathF.Ceiling( 8 + 16 + 5 + textWidth + 20 );
+		var wanted = MathF.Ceiling( 8 + 16 + 5 + textWidth + ArrowRoom );
 		if ( MathF.Abs( wanted - FixedWidth ) > .5f ) FixedWidth = wanted;
 		Paint.DrawText( new Rect( 29, 0, textWidth + 2, Height ), _text, TextFlag.LeftCenter );
+		if ( !Arrow ) return;
 		Paint.SetPen( Theme.TextLight );
 		Paint.DrawIcon( new Rect( Width - 18, 0, 14, Height ), "expand_more", 13, TextFlag.Center );
 	}

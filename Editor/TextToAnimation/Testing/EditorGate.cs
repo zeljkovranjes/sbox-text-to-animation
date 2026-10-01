@@ -136,6 +136,10 @@ public static class EditorGate
 		if ( !window.Session.HasModel ) return false;
 		Check( "start page hides once a model is open", !window.ShowsStartPage );
 		Check( "an empty workspace starts with a new-animation prompt", window.EditPrompt.Target is null );
+		Check( "an empty workspace shows the quick start and the empty side panel", window.ShowsQuickStart && window.ShowsSideEmptyState );
+		window.QuickStart.Pick( 0 );
+		Check( "a quick-start example fills the prompt", window.EditPrompt.Text == window.QuickStart.Examples[0], window.EditPrompt.Text );
+		window.EditPrompt.Text = "";
 
 		// ---- 2. the opened model
 		var session = window.Session;
