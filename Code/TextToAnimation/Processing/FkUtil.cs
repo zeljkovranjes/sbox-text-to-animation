@@ -12,7 +12,7 @@ namespace TextToAnimation.Processing;
 /// results are bit-identical to a full FK pass — they only avoid the per-call
 /// allocations (scratch buffer reuse, single-bone ancestor walks).
 /// </summary>
-internal static class FkUtil
+public static class FkUtil
 {
     /// <summary>
     /// Full-skeleton FK from <paramref name="locals"/> into the caller-owned

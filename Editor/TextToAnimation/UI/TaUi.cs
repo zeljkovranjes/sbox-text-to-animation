@@ -11,7 +11,7 @@ namespace TextToAnimation.Editor.UI;
 /// <summary>Shared look of Text to Animation's windows: dark rounded cards on the window gray,
 /// framed inputs, tinted pills and blue accents.</summary>
 /// <summary>Color roles for pills and status lines.</summary>
-internal enum Tone { Accent, Amber, Red, Neutral }
+public enum Tone { Accent, Amber, Red, Neutral }
 
 internal static class TaStyle
 {
