@@ -11,8 +11,8 @@ namespace TextToAnimation.Editor.UI;
 /// <summary>
 /// The timeline under the viewport: a ruler with the playhead, a range selection, and three lanes - pinned
 /// frames (poses kept when regenerating), keys (pose edits of the selected bones, or of all bones) and events
-/// (footsteps). Click or drag the ruler to scrub; drag across the lanes to highlight frames, and a small bar on
-/// the highlight keeps, deletes, repeats or reverses them; drag a key to move it; right click for every
+/// (footsteps). Click or drag the ruler to scrub; drag across the lanes to highlight frames, and the range bar above the
+/// timeline keeps, deletes, repeats or reverses them; drag a key to move it; right click for every
 /// timeline action (split, trim before/after, reverse…); wheel to zoom.
 /// </summary>
 public sealed class TimelineWidget : Widget
@@ -32,10 +32,6 @@ public sealed class TimelineWidget : Widget
 	int _dragStartFrame;
 	float _pressX;
 	int? _anchor; // the first point of a two-click highlight
-	readonly SelectionBar _bar;
-
-	/// <summary>True while the highlight's action bar is showing.</summary>
-	public bool ShowsSelectionBar => _bar.Visible;
 	int _keyFrom, _keyTo;
 
 	public TimelineWidget( Widget parent, EditorSession session ) : base( parent )
@@ -44,26 +40,7 @@ public sealed class TimelineWidget : Widget
 		MinimumHeight = RulerHeight + LaneHeight * Lanes.Length + 10;
 		MouseTracking = true;
 		FocusMode = FocusMode.Click;
-		_bar = new SelectionBar( this, session ) { Visible = false };
-		_session.Changed += c => { if ( (c & (SessionChange.Playhead | SessionChange.ClipData | SessionChange.ActiveClip | SessionChange.Selection)) != 0 ) { Update(); PlaceBar(); } };
-	}
-
-	/// <summary>Shows the action bar over the highlighted frames (hidden while dragging).</summary>
-	void PlaceBar()
-	{
-		if ( _session.Range is not { } r || _session.ActiveClip is null || _drag == Drag.Range ) { _bar.Visible = false; return; }
-		_bar.Visible = true;
-		_bar.AdjustSize();
-		var center = (FrameToX( r.Start ) + FrameToX( r.End )) * .5f;
-		var x = Math.Clamp( center - _bar.Width * .5f, TrackLeft, Math.Max( TrackLeft, Width - _bar.Width - 4 ) );
-		_bar.Position = new Vector2( x, RulerHeight + 2 );
-		_bar.Raise();
-	}
-
-	protected override void OnResize()
-	{
-		base.OnResize();
-		PlaceBar();
+		_session.Changed += c => { if ( (c & (SessionChange.Playhead | SessionChange.ClipData | SessionChange.ActiveClip | SessionChange.Selection)) != 0 ) Update(); };
 	}
 
 	int FrameCount => Math.Max( 1, _session.ActiveClip?.FrameCount ?? 1 );
@@ -236,8 +213,8 @@ public sealed class TimelineWidget : Widget
 		// grab an edge of the highlight to adjust it
 		if ( _session.Range is { } r )
 		{
-			if ( MathF.Abs( mx - FrameToX( r.Start ) ) < 6 ) { _drag = Drag.Range; _dragStartFrame = r.End; e.Accepted = true; PlaceBar(); return; }
-			if ( MathF.Abs( mx - FrameToX( r.End ) ) < 6 ) { _drag = Drag.Range; _dragStartFrame = r.Start; e.Accepted = true; PlaceBar(); return; }
+			if ( MathF.Abs( mx - FrameToX( r.Start ) ) < 6 ) { _drag = Drag.Range; _dragStartFrame = r.End; e.Accepted = true; return; }
+			if ( MathF.Abs( mx - FrameToX( r.End ) ) < 6 ) { _drag = Drag.Range; _dragStartFrame = r.Start; e.Accepted = true; return; }
 		}
 		if ( e.HasShift )
 		{
@@ -247,8 +224,7 @@ public sealed class TimelineWidget : Widget
 			_dragStartFrame = from;
 			_session.SetRange( Math.Min( from, f ), Math.Max( from, f ) );
 			e.Accepted = true;
-			PlaceBar();
-			return;
+				return;
 		}
 		if ( e.LocalPosition.y > RulerHeight )
 		{
@@ -297,7 +273,6 @@ public sealed class TimelineWidget : Widget
 		if ( _drag == Drag.Pending ) _session.SetRange( null, null ); // a plain click clears the highlight
 		_drag = Drag.None;
 		Update();
-		PlaceBar();
 	}
 
 	protected override void OnWheel( WheelEvent e )
@@ -307,7 +282,6 @@ public sealed class TimelineWidget : Widget
 		_zoom = Math.Clamp( _zoom * (e.Delta > 0 ? 1.15f : 1f / 1.15f), 1f, Math.Max( 1f, FrameCount / 8f ) );
 		_scroll = Math.Clamp( anchor - (e.Position.x - TrackLeft) / PixelsPerFrame, 0, Math.Max( 0, FrameCount - 1 - VisibleFrames ) );
 		Update();
-		PlaceBar();
 		e.Accept();
 	}
 
@@ -325,7 +299,7 @@ public sealed class TimelineWidget : Widget
 			c => { if ( !c.PinnedFrames.Remove( frame ) ) c.PinnedFrames.Add( frame ); } );
 	}
 
-	public void ResetZoom() { _zoom = 1f; _scroll = 0; Update(); PlaceBar(); }
+	public void ResetZoom() { _zoom = 1f; _scroll = 0; Update(); }
 
 	/// <summary>Sets the start (in) or end (out) of the highlight at <paramref name="frame"/> (I / O keys).</summary>
 	public void SetInOut( int frame, bool isIn )
@@ -355,32 +329,5 @@ public sealed class TimelineWidget : Widget
 		ClipOps.Crop( copy, session.Rig, r.Start, r.End );
 		session.SetRange( null, null );
 		session.AddClip( copy );
-	}
-
-	/// <summary>The compact actions shown on top of a highlight.</summary>
-	sealed class SelectionBar : Widget
-	{
-		public SelectionBar( Widget parent, EditorSession session ) : base( parent )
-		{
-			Layout = Layout.Row();
-			Layout.Margin = 3;
-			Layout.Spacing = 3;
-			FixedHeight = 30;
-			void Add( string text, string icon, Action action, string tip ) => Layout.Add( new TaButton( this, text, icon, action, tip, 24 ) );
-			Add( "Keep", "crop", () => RangeEdit( session, "Keep selection", ( c, a, b ) => ClipOps.Crop( c, session.Rig, a, b ) ), "Keep only the highlighted frames" );
-			Add( "Delete", "delete", () => RangeEdit( session, "Delete selection", ( c, a, b ) => ClipOps.DeleteSection( c, session.Rig, a, b ) ), "Cut the highlighted frames out (the motion joins up)" );
-			Add( "Repeat", "repeat", () => RangeEdit( session, "Repeat selection", ( c, a, b ) => ClipOps.DuplicateSection( c, session.Rig, a, b ) ), "Play the highlighted frames twice" );
-			Add( "Reverse", "swap_horiz", () => RangeEdit( session, "Reverse selection", ( c, a, b ) => ClipOps.ReverseSection( c, session.Rig, a, b ) ), "Play the highlighted frames backwards" );
-			Add( "", "content_copy", () => CopyRangeToNewClip( session ), "Copy the highlighted frames into a new animation" );
-			Add( "", "close", () => session.SetRange( null, null ), "Clear the highlight (Esc)" );
-		}
-
-		protected override void OnPaint()
-		{
-			Paint.Antialiasing = true;
-			Paint.SetPen( TaStyle.Accent.WithAlpha( .6f ), 1 );
-			Paint.SetBrush( Theme.ControlBackground.WithAlpha( .97f ) );
-			Paint.DrawRect( LocalRect.Shrink( .5f ), 5 );
-		}
 	}
 }

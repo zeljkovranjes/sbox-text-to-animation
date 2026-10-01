@@ -364,10 +364,13 @@ public static class EditorGate
 		{
 			session.SelectClip( generated );
 			session.Seek( 10 );
+			var widthBefore = window.GetWindow().Width;
 			window.Timeline.SetInOut( 10, true );
 			window.Timeline.SetInOut( 30, false );
 			await EngineThread.DelayOnMain( 200 );
-			Check( "I/O highlight frames on the timeline", session.Range is { Start: 10, End: 30 } && window.Timeline.ShowsSelectionBar, $"{session.Range}" );
+			Check( "I/O highlight frames on the timeline", session.Range is { Start: 10, End: 30 } && window.ShowsRangeBar, $"{session.Range}" );
+			Check( "the range bar fits without widening the window", window.GetWindow().Width <= widthBefore + 0.5f, $"{widthBefore} -> {window.GetWindow().Width}" );
+			Check( "the range bar keeps its labels at the default size", !window.RangeBarCompact );
 			var highlightBefore = generated.EvaluateFrames( session.Rig.Skeleton );
 			var spine = session.Rig.Skeleton.IndexOf( "spine_1" );
 			UI.TimelineWidget.RangeEdit( session, "Reverse selection", ( c, from, to ) => ClipOps.ReverseSection( c, session.Rig, from, to ) );
@@ -375,7 +378,9 @@ public static class EditorGate
 			var mirrored = Maths.MathQ.AngleBetween( highlightBefore[30][spine].Rot, after[10][spine].Rot ) < 1e-3f;
 			Check( "reverse on the highlight plays those frames backwards", mirrored && session.Range is null && after.Count == highlightBefore.Count );
 			session.UndoEdit();
-			Check( "undo restores the highlight edit", Maths.MathQ.AngleBetween( highlightBefore[10][spine].Rot, generated.EvaluateFrames( session.Rig.Skeleton )[10][spine].Rot ) < 1e-4f );
+			await EngineThread.DelayOnMain( 300 );
+			Check( "clearing the highlight leaves the window size alone", window.GetWindow().Width <= widthBefore + 0.5f, $"{widthBefore} -> {window.GetWindow().Width}" );
+			Check( "undo restores the highlight edit",Maths.MathQ.AngleBetween( highlightBefore[10][spine].Rot, generated.EvaluateFrames( session.Rig.Skeleton )[10][spine].Rot ) < 1e-4f );
 		}
 
 		// ---- 15e. creatures from FBX: vmdl, compile, size, generate, save (appended), engine playback
@@ -384,18 +389,25 @@ public static class EditorGate
 		// ---- 16. showcase for window screenshots (driver -Capture): each editor tab
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" )
 		{
+			async Task Width( string step ) { await EngineThread.DelayOnMain( 300 ); Note( $"showcase width after {step}: {window.GetWindow().Width}" ); }
+			await Width( "start" );
 			session.SelectClip( generated ?? imported );
+			await Width( "select clip" );
 			session.SelectBone( session.Rig.Skeleton.IndexOf( "arm_upper_R" ) );
+			await Width( "select bone" );
 			session.Playing = false;
 			session.Seek( 20 );
 			window.Timeline.SetInOut( 12, true );
+			await Width( "in point" );
 			window.Timeline.SetInOut( 34, false );
+			await Width( "out point" );
 			foreach ( var tab in new[] { 0, 1, 2 } )
 			{
 				window.ShowTab( tab );
 				// the Edit tab with every section open, so the shot shows all of its controls
 				if ( tab == 0 ) foreach ( var f in window.EditPanel.Children.OfType<UI.TaFold>() ) f.Open = true;
 				Note( $"showcase editor tab {tab}" );
+				await Width( $"tab {tab}" );
 				await EngineThread.DelayOnMain( 4000 );
 			}
 			var shown = new UI.PromptHistoryPopup( window, session, _ => { } );

@@ -73,6 +73,7 @@ public sealed class TextToAnimationWindow : Widget
 	Widget _transportRow;
 	QuickStart _quickStart;
 	TaEmptyState _sideEmpty;
+	RangeBar _rangeBar;
 
 	public TextToAnimationWindow( Widget parent ) : base( parent )
 	{
@@ -227,7 +228,7 @@ public sealed class TextToAnimationWindow : Widget
 		} ).OpenAbove( anchor );
 		_intentChip = _editPrompt.AddChip( PromptRequests.IntentName( _intent ), "bolt", ShowIntentMenu, "What the prompt does: change this animation, fill between pinned frames, variations, or a new animation" );
 		timelineCard.Layout.Add( new TaDivider( timelineCard ) );
-		_transportRow = timelineCard.Layout.Add( new Widget( timelineCard ) { Layout = Layout.Row() } );
+		_transportRow = timelineCard.Layout.Add( new Widget( timelineCard ) { Layout = Layout.Row(), FixedHeight = 26 } );
 		var transport = _transportRow.Layout;
 		transport.Spacing = 4;
 		transport.Add( TaStyle.Icon( timelineCard, "first_page", () => Session.Seek( 0 ), "Go to start (Home)" ) );
@@ -243,6 +244,8 @@ public sealed class TextToAnimationWindow : Widget
 			_speed.AddItem( $"{speed:0.##}x", null, () => Session.PlaybackSpeed = speed, selected: speed == 1f );
 		}
 		_time = transport.Add( TaStyle.Muted( new Label( "", timelineCard ) ), 1 );
+		_rangeBar = transport.Add( new RangeBar( timelineCard, Session ) );
+		transport.AddStretchCell();
 		transport.Add( TaStyle.Icon( timelineCard, "help_outline", () => { }, "Timeline: drag across the lanes, or click one point and Shift+click another, to highlight frames - then keep, delete, repeat or reverse them with the bar that appears. Drag the highlight edges to adjust; I/O set them at the playhead. Right click to split or trim at a frame. Double click the Pinned lane to pin a pose." ) );
 		_timeline = timelineCard.Layout.Add( new TimelineWidget( timelineCard, Session ) { FixedHeight = 84 } );
 		_timeline.BuildContextMenu = BuildTimelineMenu;
@@ -304,6 +307,12 @@ public sealed class TextToAnimationWindow : Widget
 
 	/// <summary>True while the side panel says no animation is open.</summary>
 	public bool ShowsSideEmptyState => _sideEmpty.Visible;
+
+	/// <summary>True while the highlighted frames' actions show in the transport row.</summary>
+	public bool ShowsRangeBar => _rangeBar.Visible;
+
+	/// <summary>True while the range bar shows icons only (too narrow for its labels).</summary>
+	public bool RangeBarCompact => _rangeBar.Compact;
 
 	/// <summary>The timeline under the prompt.</summary>
 	public TimelineWidget Timeline => _timeline;
@@ -655,7 +664,7 @@ public sealed class TextToAnimationWindow : Widget
 	void OnSessionChanged( SessionChange change )
 	{
 		if ( (change & (SessionChange.Model | SessionChange.Busy | SessionChange.ActiveClip | SessionChange.ClipData | SessionChange.ClipList | SessionChange.Undo)) != 0 ) RefreshAll();
-		else if ( (change & SessionChange.Playhead) != 0 ) RefreshTransport();
+		else if ( (change & (SessionChange.Playhead | SessionChange.Selection)) != 0 ) RefreshTransport();
 		if ( (change & SessionChange.Model) != 0 && Session.Model is not null )
 		{
 			Viewport.SetModel( Session.Model );
@@ -720,9 +729,26 @@ public sealed class TextToAnimationWindow : Widget
 	void RefreshTransport()
 	{
 		var clip = Session.ActiveClip;
+		// a highlight puts its actions where the time readout was
+		// labels only when they fit next to the transport buttons, so the bar never widens the window
+		// whichever is leaving hides first: Qt grows the window if both are visible for a moment
+		var highlighted = Session.Range is not null && clip is not null;
+		if ( highlighted ) _time.Visible = false;
+		_rangeBar.Compact = _transportRow.Width < TransportButtonsWidth + _rangeBar.FullWidth;
+		_rangeBar.Refresh();
+		if ( !highlighted ) _time.Visible = true;
 		_play.Icon = Session.Playing ? "pause" : "play_arrow";
 		_play.Update();
 		_time.Text = clip is null ? "" : $"Frame {Session.CurrentFrame} / {clip.FrameCount - 1}   ·   {Session.CurrentFrame / clip.Fps:0.00} s / {clip.Duration:0.00} s   ·   {clip.Fps:0} fps";
+	}
+
+	/// <summary>The transport buttons, speed box and help icon (the rest of the row is the readout or the range bar).</summary>
+	const float TransportButtonsWidth = 270f;
+
+	protected override void OnResize()
+	{
+		base.OnResize();
+		if ( _rangeBar is not null ) RefreshTransport();
 	}
 
 	public void SetStatus( string text, Tone tone )
