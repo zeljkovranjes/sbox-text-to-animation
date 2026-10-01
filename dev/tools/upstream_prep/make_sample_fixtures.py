@@ -23,24 +23,50 @@ import types  # noqa: E402
 sys.modules.setdefault("data_process.utils.plotting", types.SimpleNamespace(**{n: (lambda *a, **k: None) for n in (
     "save_skeleton_motion", "save_skeleton_motion_ground", "save_skeleton_motion_spectral", "save_skeleton_tpose_ground")}))
 from data_process.utils.motion_features import process_tpose  # noqa: E402
+import data_process.utils.skeleton as _skel  # noqa: E402
+from collections import deque  # noqa: E402
+
+
+def _bfs_with_tie_clusters(parents, offsets=None):
+    """upstream bfs_reorder_joints with the port's tie convention: sibling bone lengths equal up to rounding
+    (consecutive lengths <= 1e-6 relative apart) form one cluster, kept in file order. Upstream compares raw floats,
+    so its order inside such ties is rounding noise; both sides of the comparison use this rule."""
+    n = len(parents)
+    length = np.linalg.norm(offsets, axis=-1) if offsets is not None else np.zeros(n)
+    children = [[] for _ in range(n)]; root = None
+    for j, p in enumerate(parents):
+        if p == -1: root = j
+        else: children[p].append(j)
+    topo, q = [], deque([root])
+    while q:
+        u = q.popleft(); topo.append(u); q.extend(children[u])
+    size = [1] * n
+    for u in reversed(topo):
+        for c in children[u]: size[u] += size[c]
+    for u in range(n):
+        by_len = sorted(children[u], key=lambda c: length[c])
+        cl = {}
+        for k, c in enumerate(by_len):
+            prev = by_len[k - 1] if k else None
+            cl[c] = cl[prev] if prev is not None and length[c] - length[prev] <= 1e-6 * length[c] else length[c]
+        children[u] = sorted(children[u], key=lambda c: (-size[c], cl[c], children[u].index(c)))
+    order, q = [], deque([root])
+    while q:
+        u = q.popleft(); order.append(u); q.extend(children[u])
+    old2new = {o: i for i, o in enumerate(order)}
+    return order, [-1 if parents[o] == -1 else old2new[parents[o]] for o in order]
+
+
+_skel.bfs_reorder_joints = _bfs_with_tie_clusters
 from data_process.joint_annotation.names_clean_rule import clean_joint_name, post_process  # noqa: E402
 from data_process.joint_annotation.face_select_rule import resolve_face_joints  # noqa: E402
-
-
-def trim_to(names, parents, world, max_joints):
-    """The port's one extension (independent re-implementation): over the model's joint limit, remove leaves
-    shortest bone first, the last in order on ties."""
-    names, parents, world = list(names), list(parents), np.array(world)
-    trimmed = 0
-    while len(names) > max_joints:
-        kids = {p for p in parents if p >= 0}
-        cand = [(np.linalg.norm(world[i] - world[parents[i]]), -i, i) for i in range(len(names)) if parents[i] >= 0 and i not in kids]
-        i = min(cand)[2]
-        keep = [k for k in range(len(names)) if k != i]
-        remap = {o: n for n, o in enumerate(keep)}
-        parents = [-1 if parents[k] < 0 else remap[parents[k]] for k in keep]
-        names = [names[k] for k in keep]; world = world[keep]; trimmed += 1
-    return names, parents, world, trimmed
+from data_process.utils.skeleton import scale_anim  # noqa: E402
+from Animation import Animation  # noqa: E402
+from unimate.dataset.transforms import extract_conditions, apply_normalization, apply_padding, build_parent_features  # noqa: E402
+from unimate.dataset.mixture.collate import mixture_batch_collate  # noqa: E402
+from unimate.utils.topology_utils import (compute_edge_relations_and_distances, compute_joint_depths,  # noqa: E402
+                                          compute_laplacian_eigenvectors, compute_edge_indexs)
+from unimate.utils.motion_utils import recover_unimate_joint_pos_from_rot, recover_unimate_anim_from_rot  # noqa: E402
 
 
 def upstream_prepare(names, parents, world_pos, world_rot_wxyz, tag):
@@ -90,53 +116,78 @@ for path in sorted(glob.glob(os.path.join(FIX, "prep_*.json"))):
     if len(kept_raw) < cfg.dataset.min_joints:
         print(f"SKIP {rig}: {len(kept_raw)} joints (the model takes at least {cfg.dataset.min_joints})")
         continue
-    # over the joint limit: the port's leaf trim, then upstream's own canonicalization of what remains
-    names_t, parents_t, _, trimmed = trim_to(names_pruned, fx["pruned"]["parents"], [raw[i]["pos"] for i in kept_raw], MJ)
-    kept_raw = [idx[n] for n in names_t]
-    (tpos_anim, _, _, _, parents_bfs, names_bfs, _, order, face_idxs, body_axis), clean = upstream_prepare(
-        names_t, parents_t, [raw[i]["pos"] for i in kept_raw], [raw[i]["rot"] for i in kept_raw], rig)
-    if not trimmed:
-        assert list(order) == fx["bfs"]["order"], rig           # same skeleton as the preparation fixture
-    from Animation import positions_global
-    bfs = dict(face_idxs=[int(i) for i in face_idxs], body_axis=bool(body_axis), clean_names=[clean[o] for o in order],
-               tpos=positions_global(tpos_anim)[0].tolist())
+    (tpos_anim, offsets_cond, scale_factor, _, parents_bfs, names_bfs, _, order, face_idxs, body_axis), clean = upstream_prepare(
+        names_pruned, fx["pruned"]["parents"], [raw[i]["pos"] for i in kept_raw], [raw[i]["rot"] for i in kept_raw], rig)
+    # (the joint ORDER may differ from the Blender run on exact ties: upstream breaks them by float rounding)
+    from Animation import positions_global, rotations_global, offsets_from_positions, transforms_local
     parents = np.array(parents_bfs)
     J = len(parents)
+    clean_bfs = [clean[o] for o in order]
+    tpos = positions_global(tpos_anim)[0]
     src = [kept_raw[o] for o in order]                              # BFS joint -> raw bone
     world = np.array([raw[i]["pos"] for i in src], float)
     rest_rot = np.array([raw[i]["rot"] for i in src], float)        # wxyz, Blender world
 
-    # canonical frame exactly as upstream's canonicalize_anim (facing quat, center, diameter, ground)
+    # the canonical frame as a source->canonical map, for mapping the result back (checked against upstream's T-pose)
     p = world @ UP.T
-    face = bfs["face_idxs"]
-    q = get_root_facing_quat(p[None], face, body_axis=bfs["body_axis"]).qs[0]
+    q = get_root_facing_quat(p[None], [int(i) for i in face_idxs], body_axis=bool(body_axis)).qs[0]
     M = q_to_mat(q[None])[0] @ UP
     pc = world @ M.T
     scale = 2.0 / tree_diameter(parents, pc)
     origin = np.array([pc[0, 0], pc[:, 1].min(), pc[0, 2]])
-    tpos = (pc - origin) * scale
-    assert np.abs(tpos - np.array(bfs["tpos"])).max() < 1e-5, rig
+    assert np.abs((pc - origin) * scale - tpos).max() < 1e-5, rig
     canon = dict(tpos=tpos, M=M, origin=origin, scale=scale)
 
-    # conditioning: upstream clean names (T5, mean-pooled), the rig's own statistics family
-    family = "mixamo" if rig.startswith("citizen") else "truebones"  # an input both sides share (stored below)
-    uniq = sorted(set(bfs["clean_names"]))
+    # ---- conditioning with upstream's own dataset functions (create_sample_condition's path)
+    family = "objaverse"  # the port's statistics for a new rig (upstream's generic asset pipeline); both sides
+    stats = stats_all[family]
+    mj = max(MJ, J)                                                 # the network has no per-joint weights: pad to J
+    for m in model.modules():
+        if hasattr(m, "max_joints"): m.max_joints = mj
+        if type(m).__name__ == "FinalLayer": m.joint = mj
+    tpos12 = np.concatenate([tpos, np.zeros((J, 9))], -1)
+    tpos12[:, 3:9] = Quaternions.id(1).rotation_matrix(cont6d=True)[0]
+    conds = extract_conditions(np.zeros((T, J, 12)), tpos12, "tpos")
+    mean = np.zeros((J, 12)); std = np.zeros((J, 12))
+    mean[0], std[0] = stats["mean_root"], stats["std_root"]
+    mean[1:], std[1:] = stats["mean_local"], stats["std_local"]
+    tpos_n = apply_normalization(conds["tpos_first_frame"], mean, std)
+    motion_n, _ = apply_padding(apply_normalization(conds["motion"], mean, std), T)
+    rel, dist = compute_edge_relations_and_distances(parents, max_path_len=5)
+    depth = compute_joint_depths(parents)
+    spec, _ = compute_laplacian_eigenvectors(parents, max_freqs=8)
+    uniq = sorted(set(clean_bfs))
     _, pooled, _ = te.encode([PROMPT] + uniq)
     emb = {n: pooled[1 + i] for i, n in enumerate(uniq)}
-    joint_emb = np.stack([emb[n] for n in bfs["clean_names"]])
-    cond, parts = build_cond(tpos, parents, joint_emb, pooled[0], stats_all[family], MJ, MD)
+    joint_emb = np.stack([emb[n] for n in clean_bfs]).astype(np.float32)
+    batch = dict(motion=motion_n, max_motion_length=T, motion_length=T, max_joints=mj, parents=parents,
+                 edge_indexs=compute_edge_indexs(parents), tpos_first_frame=tpos_n,
+                 tpos_first_frame_parents=build_parent_features(tpos_n, parents)["tpos_first_frame_parents"],
+                 offsets=offsets_cond, joint_graph_dist=dist, joint_relations=rel, joint_depths=depth,
+                 spectral_feats=spec, joint_names_emb=joint_emb, object_type=rig, start_idx=0, mean=mean, std=std,
+                 split_tag="train", caption=PROMPT, caption_emb=pooled[0])
+    _, cond = mixture_batch_collate([batch])
 
-    noise = torch.randn((1, MJ, 12, T), generator=torch.Generator().manual_seed(1234))
+    noise = torch.randn((1, mj, 12, T), generator=torch.Generator().manual_seed(1234))
     x = euler_sample(model, cond, noise, cfg=CFG, steps=STEPS)
-    feat = x[0, :J].permute(2, 0, 1).numpy() * parts["std"][None] + parts["mean"][None]
+    feat = x[0, :J].permute(2, 0, 1).numpy() * std[None] + mean[None]
 
-    # upstream's own recovery: HML -> BVH rotations, integrated root trajectory
+    # ---- upstream's own recovery: BVH rotations + root (motion_utils), FK positions, rig-driving matrices
     bvh = hml_rotations_to_bvh_quaternions(feat[:, :, 3:9], parents).qs
     _, root_pos = recover_unimate_root_quat_and_pos(feat[:, 0])
+    fk_pos = recover_unimate_joint_pos_from_rot(feat, parents, offsets_from_positions(tpos, parents))
+    tpos_offsets = offsets_from_positions(tpos, parents)
+    anim = scale_anim(recover_unimate_anim_from_rot(feat, parents, tpos_offsets), 1.0 / scale_factor)
+    rest = Animation(Quaternions.id((1, J)), (tpos_offsets / scale_factor)[None], Quaternions.id(J), tpos_offsets / scale_factor, parents)
     L, G, root = to_engine(bvh, root_pos, canon, rest_rot, parents)
 
-    np.savez(os.path.join(FIX, f"sample_{rig}.npz"), noise=noise.numpy(), caption_emb=pooled[0], x_final=x.numpy(),
-             features=feat, bvh_local_q=bvh, root_pos_canon=root_pos, engine_world_q=G, engine_root_pos=root,
-             spectral=parts["spec"], src_bone=np.array(src), stats=np.array(family))
-    np.savez(os.path.join(FIX, f"sample_{rig}_kept.npz"), names=np.array([raw[i]["name"] for i in src]))
-    print(f"SAMPLE {rig}: {J} joints{f' ({trimmed} leaves trimmed)' if trimmed else ''}, stats {family}")
+    np.savez(os.path.join(FIX, f"sample_{rig}.npz"), noise=noise.numpy()[:, :J], caption_emb=pooled[0], x_final=x.numpy()[:, :J],
+             features=feat, bvh_local_q=bvh, root_pos_canon=root_pos, fk_pos=fk_pos, engine_world_q=G, engine_root_pos=root,
+             spectral=spec, src_bone=np.array(src),
+             cond_tpos=cond["tpos_first_frame"][0, :J].numpy(), cond_tpos_parents=cond["tpos_first_frame_parents"][0, :J].numpy(),
+             cond_relations=cond["joint_relations"][0, :J, :J].numpy(), cond_graph_dist=cond["graph_dist"][0, :J, :J].numpy(),
+             cond_depths=cond["joint_depths"][0, :J].numpy(), cond_spectral=cond["spectral_feats"][0, :J].numpy(),
+             cond_name_emb=cond["joint_names_emb"][0, :J].numpy(),
+             anim_local_mat=transforms_local(anim), rest_local_mat=transforms_local(rest)[0],
+             tpos_global_rot=rotations_global(tpos_anim).qs[0])
+    print(f"SAMPLE {rig}: {J} joints, stats {family}")

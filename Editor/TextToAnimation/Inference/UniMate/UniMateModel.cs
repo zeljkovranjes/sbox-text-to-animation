@@ -130,8 +130,19 @@ public sealed class UniMateModel
 	/// <summary>Runs the prepare graph for a skeleton (joint names are embedded with T5).</summary>
 	public PreparedSkeleton Prepare( UniMateSkeleton s, UniMateStats stats, CancellationToken token )
 	{
+		var (prepare, _) = Graphs( s.Count, token );
+		var outputs = prepare.Run( ConditioningInputs( s, stats, token ), token );
+		return new PreparedSkeleton { Skeleton = s, Tensors = outputs };
+	}
+
+	/// <summary>
+	/// The skeleton conditioning the network gets (upstream create_sample_condition: normalised T-pose features with
+	/// identity rotations, the parents' copies, relations, graph distances, depths, spectral features, joint-name
+	/// embeddings).
+	/// </summary>
+	public Dictionary<string, Tensor> ConditioningInputs( UniMateSkeleton s, UniMateStats stats, CancellationToken token )
+	{
 		var J = s.Count;
-		var (prepare, _) = Graphs( J, token );
 		var tpos = new float[J * 12]; var parentRow = new float[J * 12];
 		for ( var j = 0; j < J; j++ )
 		{
@@ -151,7 +162,7 @@ public sealed class UniMateModel
 		for ( var j = 0; j < J; j++ ) for ( var c = 0; c < 8; c++ ) spec[j * 8 + c] = s.Spectral[j, c];
 		var names = new float[J * T5TextEncoder.Width];
 		for ( var j = 0; j < J; j++ ) Array.Copy( Text.Encode( s.CleanNames[j], token ), 0, names, j * T5TextEncoder.Width, T5TextEncoder.Width );
-		var outputs = prepare.Run( new Dictionary<string, Tensor>
+		return new Dictionary<string, Tensor>
 		{
 			["tpos"] = Tensor.Float( new[] { J, 12 }, tpos ),
 			["tpos_parent"] = Tensor.Float( new[] { J, 12 }, parentRow ),
@@ -160,8 +171,7 @@ public sealed class UniMateModel
 			["depth"] = Tensor.Int64( new[] { J }, s.Depths.ToArray() ),
 			["spectral"] = Tensor.Float( new[] { J, 8 }, spec ),
 			["name_emb"] = Tensor.Float( new[] { J, T5TextEncoder.Width }, names ),
-		}, token );
-		return new PreparedSkeleton { Skeleton = s, Tensors = outputs };
+		};
 	}
 
 	/// <summary>

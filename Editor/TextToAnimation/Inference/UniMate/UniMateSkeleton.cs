@@ -164,7 +164,7 @@ public sealed class UniMateSkeleton
 	public static (int[] Order, int[] Parents) BfsOrder( IReadOnlyList<int> parents, IReadOnlyList<Vector3> restWorld )
 	{
 		var n = parents.Count;
-		var bone = new float[n];
+		var bone = new double[n];
 		var children = Enumerable.Range( 0, n ).Select( _ => new List<int>() ).ToArray();
 		var root = -1;
 		for ( var j = 0; j < n; j++ )
@@ -174,7 +174,9 @@ public sealed class UniMateSkeleton
 			else
 			{
 				children[p].Add( j );
-				bone[j] = (restWorld[j] - restWorld[p]).Length();
+				// double precision, like upstream's float64 offsets
+				double dx = (double)restWorld[j].X - restWorld[p].X, dy = (double)restWorld[j].Y - restWorld[p].Y, dz = (double)restWorld[j].Z - restWorld[p].Z;
+				bone[j] = Math.Sqrt( dx * dx + dy * dy + dz * dz );
 			}
 		}
 		var topo = new List<int>();
@@ -184,7 +186,16 @@ public sealed class UniMateSkeleton
 		var size = Enumerable.Repeat( 1, n ).ToArray();
 		for ( var i = topo.Count - 1; i >= 0; i-- ) foreach ( var c in children[topo[i]] ) size[topo[i]] += size[c];
 		for ( var i = 0; i < n; i++ )
-			children[i] = children[i].Select( ( c, k ) => (c, k) ).OrderBy( t => -size[t.c] ).ThenBy( t => bone[t.c] ).ThenBy( t => t.k ).Select( t => t.c ).ToList();
+		{
+			// bone lengths equal up to rounding (mirrored limbs) are one tie, kept in file order: siblings are grouped
+			// into clusters of lengths 1e-6 (relative) apart, then ordered by (-subtree size, cluster, file order).
+			// Upstream compares the raw floats, so its order there is decided by rounding noise.
+			var byLen = children[i].OrderBy( c => bone[c] ).ToList();
+			var cluster = new Dictionary<int, double>();
+			for ( var k = 0; k < byLen.Count; k++ )
+				cluster[byLen[k]] = k > 0 && bone[byLen[k]] - bone[byLen[k - 1]] <= 1e-6 * bone[byLen[k]] ? cluster[byLen[k - 1]] : bone[byLen[k]];
+			children[i] = children[i].Select( ( c, k ) => (c, k) ).OrderBy( t => -size[t.c] ).ThenBy( t => cluster[t.c] ).ThenBy( t => t.k ).Select( t => t.c ).ToList();
+		}
 		var order = new List<int>();
 		q.Enqueue( root );
 		while ( q.Count > 0 ) { var u = q.Dequeue(); order.Add( u ); foreach ( var c in children[u] ) q.Enqueue( c ); }

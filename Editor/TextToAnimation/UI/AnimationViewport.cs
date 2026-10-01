@@ -46,6 +46,63 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	/// </summary>
 	public string EngineSequence { get; set; }
 
+	/// <summary>
+	/// Bones the model's own constraints drive at runtime (from its vmdl and prefabs). For a clip whose compiled
+	/// sequence is current, the view takes these from the engine itself, so the preview shows the game's result.
+	/// </summary>
+	public IReadOnlySet<string> ConstraintDriven { get; set; } = new HashSet<string>();
+
+	/// <summary>The compiled sequence holding the active clip unchanged (set by the window), or null.</summary>
+	public string SavedSequence { get; set; }
+
+	/// <summary>
+	/// The preview's constraint-driven bones against the engine playing <paramref name="sequence"/> at the playhead,
+	/// both relative to <paramref name="anchor"/> (the game may extract root motion): the largest position difference.
+	/// </summary>
+	public float PreviewVsGameOnDrivenBones( string sequence, string anchor )
+	{
+		var rig = _session.Rig;
+		if ( rig is null || !_sceneModel.IsValid() || _model is null ) return float.NaN;
+		var s = rig.Skeleton;
+		var a = s.IndexOf( anchor );
+		if ( a < 0 || _boneMap[a] < 0 || _session.ActiveFrames is not { Count: > 0 } frames ) return float.NaN;
+		// the pose at the current playhead (the paint tick may not have run since the last seek)
+		SamplePose( frames, _session.Playhead, _pose );
+		FkUtil.ToWorld( _pose, s, _world );
+		ApplyPose();
+		var preview = Enumerable.Range( 0, s.Count ).Select( b => _boneMap[b] >= 0 ? _sceneModel.GetBoneWorldTransform( _boneMap[b] ) : default ).ToArray();
+		var saved = EngineSequence;
+		EngineSequence = sequence;
+		ApplyPose();
+		var game = Enumerable.Range( 0, s.Count ).Select( b => _boneMap[b] >= 0 ? _sceneModel.GetBoneWorldTransform( _boneMap[b] ) : default ).ToArray();
+		EngineSequence = saved;
+		ApplyPose();
+		var worst = 0f; var worstOther = 0f; string worstBone = "", worstOtherBone = "";
+		for ( var b = 0; b < s.Count; b++ )
+		{
+			if ( _boneMap[b] < 0 ) continue;
+			var d = (preview[a].ToLocal( preview[b] ).Position - game[a].ToLocal( game[b] ).Position).Length;
+			if ( ConstraintDriven.Contains( s[b].Name ) ) { if ( d > worst ) { worst = d; worstBone = s[b].Name; } }
+			else if ( d > worstOther ) { worstOther = d; worstOtherBone = s[b].Name; }
+		}
+		LastDrivenReport = $"worst {worstBone}; other bones max {worstOther:0.000} in ({worstOtherBone})";
+		return worst;
+	}
+
+	/// <summary>Which bones the last <see cref="PreviewVsGameOnDrivenBones"/> found furthest apart.</summary>
+	public string LastDrivenReport { get; private set; } = "";
+
+	/// <summary>The sequence the active clip was saved as, when it hasn't changed since (its compiled copy is current).</summary>
+	string CurrentSavedSequence()
+	{
+		var clip = _session.ActiveClip;
+		return clip?.SavedUtc is not null && ClipListPanel.SavedRevisions.TryGetValue( clip.Id, out var revision ) && revision == clip.Revision
+			? clip.EffectiveSequenceName : null;
+	}
+
+	/// <summary>True when the last pose took the constraint-driven bones from the engine.</summary>
+	public bool UsedEngineConstraints { get; private set; }
+
 	public AnimationViewport( Widget parent, EditorSession session ) : base( parent )
 	{
 		_session = session;
@@ -82,7 +139,9 @@ public sealed class AnimationViewport : SceneRenderingWidget
 		_model = model;
 		_sceneModel?.Delete();
 		_sceneModel = null;
+		DeleteEngineModel();
 		if ( model is null || model.IsError || _session.Rig is null ) return;
+		DeleteEngineModel();
 		_sceneModel = new SceneModel( Scene.SceneWorld, model, Transform.Zero ) { UseAnimGraph = false };
 		var skeleton = _session.Rig.Skeleton;
 		_boneMap = skeleton.Bones.Select( b => model.Bones.GetBone( b.Name )?.Index ?? -1 ).ToArray();
@@ -161,25 +220,150 @@ public sealed class AnimationViewport : SceneRenderingWidget
 				System.Numerics.Quaternion.Normalize( System.Numerics.Quaternion.Slerp( fa[i].Rot, fb[i].Rot, t ) ) );
 	}
 
+	SceneWorld _engineWorld;
+	SceneModel _engineModel;
+	string _engineModelSequence;
+
+	/// <summary>
+	/// The engine's own pose of compiled <paramref name="sequence"/> at <paramref name="seconds"/> (its animation and
+	/// the model's constraints), on a hidden model that only ever plays that sequence: switching sequences on a model
+	/// crossfades from the previous one, which an editor (that never advances time) would never finish.
+	/// </summary>
+	SceneModel EngineModelAt( string sequence, float seconds )
+	{
+		// recreated until it really plays the sequence (one made while a save was recompiling the model has none)
+		if ( !_engineModel.IsValid() || _engineModelSequence != sequence || _engineModel.CurrentSequence.Name != sequence )
+		{
+			DeleteEngineModel();
+			_engineWorld = new SceneWorld();
+			// the compiled model as it is now (a save recompiles it; the view's instance can lag behind)
+			var compiled = Model.Load( _model.ResourcePath );
+			_engineModel = new SceneModel( _engineWorld, compiled is { IsError: false } ? compiled : _model, Transform.Zero ) { UseAnimGraph = false };
+			_engineModel.CurrentSequence.Name = sequence;
+			_engineModel.Update( 0f );
+			_engineModelSequence = sequence;
+		}
+		_engineModel.CurrentSequence.Time = seconds;
+		_engineModel.Update( 0f );
+		return _engineModel;
+	}
+
+	/// <summary>
+	/// Every bone's world transform on an engine-played model, chained from the parent-space bones that
+	/// <see cref="SceneModel.Update"/> evaluates (the world transforms it reports refresh only when the scene renders).
+	/// </summary>
+	Transform[] EngineWorld( SceneModel engine )
+	{
+		var count = _model.BoneCount;
+		var world = new Transform[count];
+		var state = new byte[count]; // 0 todo, 1 in progress (a parent loop cuts there), 2 done
+		Transform Of( int b )
+		{
+			if ( state[b] == 2 ) return world[b];
+			var local = engine.GetParentSpaceBone( b );
+			var parent = _model.GetBoneParent( b );
+			state[b] = 1;
+			world[b] = parent < 0 || parent >= count || state[parent] == 1 ? local : Of( parent ).ToWorld( local );
+			state[b] = 2;
+			return world[b];
+		}
+		for ( var b = 0; b < count; b++ ) Of( b );
+		return world;
+	}
+
+	void DeleteEngineModel()
+	{
+		if ( _engineModel.IsValid() ) _engineModel.Delete();
+		_engineWorld?.Delete();
+		_engineModel = null;
+		_engineWorld = null;
+		_engineModelSequence = null;
+	}
+
 	void ApplyPose()
 	{
 		if ( !_sceneModel.IsValid() ) return;
 		_sceneModel.RenderingEnabled = ShowModel;
 		if ( !string.IsNullOrEmpty( EngineSequence ) )
 		{
-			_sceneModel.ClearBoneOverrides();
-			if ( _sceneModel.CurrentSequence.Name != EngineSequence ) _sceneModel.CurrentSequence.Name = EngineSequence;
-			var fps = _session.ActiveClip?.Fps ?? 30f;
-			_sceneModel.CurrentSequence.Time = _session.Playhead / fps;
+			var engine = EngineWorld( EngineModelAt( EngineSequence, _session.Playhead / (_session.ActiveClip?.Fps ?? 30f) ) );
+			for ( var b = 0; b < engine.Length; b++ ) _sceneModel.SetBoneOverride( b, engine[b] );
 			_sceneModel.Update( 0f );
 			return;
+		}
+		var final = new Transform[_boneMap.Length];
+		for ( var i = 0; i < _boneMap.Length; i++ ) final[i] = ModelBridge.ToTransform( _world[i], _bindScale[i] );
+		UsedEngineConstraints = false;
+		var saved = SavedSequence ?? CurrentSavedSequence();
+		if ( ConstraintDriven.Count > 0 && !string.IsNullOrEmpty( saved ) && _model.AnimationNames.Contains( saved ) )
+		{
+			// the engine evaluates the model's constraints only while playing a compiled sequence: play the saved one at
+			// this time, take each driven bone relative to its parent, and place it on this pose (root motion kept)
+			var engine = EngineWorld( EngineModelAt( saved, _session.Playhead / (_session.ActiveClip?.Fps ?? 30f) ) );
+			var skeleton = _session.Rig.Skeleton;
+			var moved = new bool[skeleton.Count];
+			for ( var i = 0; i < skeleton.Count; i++ ) // parents come before children
+			{
+				var p = skeleton[i].ParentIndex;
+				if ( _boneMap[i] < 0 || p < 0 || _boneMap[p] < 0 ) continue;
+				if ( ConstraintDriven.Contains( skeleton[i].Name ) )
+				{
+					var local = engine[_boneMap[p]].ToLocal( engine[_boneMap[i]] );
+					final[i] = final[p].ToWorld( local );
+					moved[i] = UsedEngineConstraints = true;
+				}
+				else if ( moved[p] )
+				{
+					// below a driven bone: keep this pose's local transform under the engine-placed parent
+					final[i] = final[p].ToWorld( ModelBridge.ToTransform( _world[p], _bindScale[p] ).ToLocal( ModelBridge.ToTransform( _world[i], _bindScale[i] ) ) );
+					moved[i] = true;
+				}
+			}
 		}
 		for ( var i = 0; i < _boneMap.Length; i++ )
 		{
 			if ( _boneMap[i] < 0 ) continue;
-			_sceneModel.SetBoneOverride( _boneMap[i], ModelBridge.ToTransform( _world[i], _bindScale[i] ) );
+			_sceneModel.SetBoneOverride( _boneMap[i], final[i] );
 		}
 		_sceneModel.Update( 0f ); // flush overrides now (otherwise the pose lags a frame)
+	}
+
+	/// <summary>
+	/// The engine's own pose while playing compiled <paramref name="sequence"/> (animation + the model's constraints):
+	/// world transforms of every bone and of the named attachments, at the given frames. Ground truth for the
+	/// constraint evaluator.
+	/// </summary>
+	public object EnginePoses( string sequence, IEnumerable<int> frames, float fps, IReadOnlyList<string> attachments )
+	{
+		if ( _model is null || !_sceneModel.IsValid() ) return null;
+		var saved = EngineSequence;
+		EngineSequence = null;
+		var result = new List<object>();
+		static float[] P( Transform t ) => new[] { t.Position.x, t.Position.y, t.Position.z, t.Rotation.x, t.Rotation.y, t.Rotation.z, t.Rotation.w };
+		foreach ( var f in frames )
+		{
+			var engineModel = EngineModelAt( sequence, f / fps );
+			var engine = EngineWorld( engineModel );
+			// the pose the sequence stores (before constraints), in the same model space as the engine's bones
+			var stored = new Dictionary<string, float[]>();
+			if ( _session.ActiveFrames is { Count: > 0 } clipFrames && _session.Rig is { } rig )
+			{
+				var pose = new XForm[rig.Skeleton.Count]; var world = new XForm[rig.Skeleton.Count];
+				SamplePose( clipFrames, f, pose );
+				FkUtil.ToWorld( pose, rig.Skeleton, world );
+				for ( var i = 0; i < rig.Skeleton.Count; i++ )
+					if ( _boneMap[i] >= 0 ) stored[rig.Skeleton[i].Name] = P( ModelBridge.ToTransform( world[i], _bindScale[i] ) );
+			}
+			result.Add( new
+			{
+				frame = f,
+				stored,
+				bones = Enumerable.Range( 0, _model.BoneCount ).ToDictionary( b => _model.GetBoneName( b ), b => P( engine[b] ) ),
+				attachments = attachments.Select( a => (a, t: (object)engineModel.GetAttachment( a, true )) ).Where( x => x.t is Transform ).ToDictionary( x => x.a, x => P( (Transform)x.t ) ),
+			} );
+		}
+		EngineSequence = saved;
+		return result;
 	}
 
 	/// <summary>The floor the model stands on: z = 0 for normal models, or its lowest rest point when that is below.</summary>
@@ -409,6 +593,7 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	{
 		base.OnDestroyed();
 		_sceneModel?.Delete();
+		DeleteEngineModel();
 		Scene?.Destroy();
 		Scene = null;
 	}

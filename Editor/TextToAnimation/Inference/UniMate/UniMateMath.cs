@@ -53,14 +53,19 @@ public struct M3
 		double qx = Math.Sqrt( Math.Max( 0, (1 + d0 - d1 - d2) / 4 ) );
 		double qy = Math.Sqrt( Math.Max( 0, (1 - d0 + d1 - d2) / 4 ) );
 		double qz = Math.Sqrt( Math.Max( 0, (1 - d0 - d1 + d2) / 4 ) );
-		static double S( double v ) => Math.Sign( v );
+		// Upstream (Motion's Quaternions.from_transforms) takes every component's magnitude from the diagonal and its
+		// sign from the off-diagonals - exact in float64, but sqrt of a near-zero difference turns float32 rounding
+		// (1e-7) into ~3e-4 for a small component. Same branch choice and signs, the other components from the
+		// off-diagonals (the identical rotation in exact arithmetic, well conditioned in single precision).
 		var max = Math.Max( Math.Max( qw, qx ), Math.Max( qy, qz ) );
 		double w, x, y, z;
-		if ( max == qw ) { w = qw; x = qx * S( M21 - M12 ); y = qy * S( M02 - M20 ); z = qz * S( M10 - M01 ); }
-		else if ( max == qx ) { w = qw * S( M21 - M12 ); x = qx; y = qy * S( M10 + M01 ); z = qz * S( M02 + M20 ); }
-		else if ( max == qy ) { w = qw * S( M02 - M20 ); x = qx * S( M10 + M01 ); y = qy; z = qz * S( M21 + M12 ); }
-		else { w = qw * S( M10 - M01 ); x = qx * S( M20 + M02 ); y = qy * S( M21 + M12 ); z = qz; }
-		return new Quaternion( (float)x, (float)y, (float)z, (float)w );
+		var k = 1.0 / (4 * max);
+		if ( max == qw ) { w = qw; x = (M21 - M12) * k; y = (M02 - M20) * k; z = (M10 - M01) * k; }
+		else if ( max == qx ) { x = qx; w = (M21 - M12) * k; y = (M10 + M01) * k; z = (M02 + M20) * k; }
+		else if ( max == qy ) { y = qy; w = (M02 - M20) * k; x = (M10 + M01) * k; z = (M21 + M12) * k; }
+		else { z = qz; w = (M10 - M01) * k; x = (M20 + M02) * k; y = (M21 + M12) * k; }
+		var n = Math.Sqrt( w * w + x * x + y * y + z * z );
+		return new Quaternion( (float)(x / n), (float)(y / n), (float)(z / n), (float)(w / n) );
 	}
 
 	/// <summary>6D rotation: the first two columns.</summary>

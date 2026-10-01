@@ -16,7 +16,11 @@ public class UniMateRigTests
     {
         var rig = Fixtures.HumanRig();
         var u = UniMateRig.Build(rig);
-        Assert.Equal(System.Math.Min(rig.Skeleton.Count, UniMateRig.MaxJoints), u.Count);
+        // two root trees (pelvis and the IK helpers under root_IK): upstream prune_secondary_roots keeps the larger one
+        int RootOf(int b) { while (rig.Skeleton[b].ParentIndex >= 0) b = rig.Skeleton[b].ParentIndex; return b; }
+        var main = Enumerable.Range(0, rig.Skeleton.Count).GroupBy(RootOf).OrderByDescending(g => g.Count()).First();
+        Assert.Equal(main.Count(), u.Count);
+        Assert.All(u.Bone, b => Assert.Equal(main.Key, RootOf(b)));
         Assert.All(u.Bone, b => Assert.True(b >= 0));
         for (var j = 0; j < u.Count; j++) Assert.Equal(UniMateNames.Clean(rig.Skeleton[u.Bone[j]].Name, ""), u.Skeleton.CleanNames[j]);
         Assert.True(u.Skeleton.RightHip >= 0 && u.Skeleton.LeftHip >= 0);

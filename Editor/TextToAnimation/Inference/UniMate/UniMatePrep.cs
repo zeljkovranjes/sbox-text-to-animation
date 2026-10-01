@@ -49,17 +49,10 @@ public static class UniMatePrep
 		public int FaceLeft { get; init; } = -1;
 		public bool BodyAxis { get; init; }
 		public string FaceSource { get; init; } = "empty";
-		/// <summary>Leaves trimmed beyond upstream's pruning to fit the model's joint limit (our extension; 0 when upstream's result fits).</summary>
-		public int TrimmedLeaves { get; init; }
 	}
 
-	/// <summary>
-	/// Upstream's preparation of <paramref name="input"/>. When more than <paramref name="maxJoints"/> joints remain,
-	/// leaves are removed shortest bone first until it fits - upstream has no rule for rigs over the model's limit
-	/// (its dataset leaves them out; its training augmentation removes leaves, favouring short bones), so this is
-	/// the one step that is ours.
-	/// </summary>
-	public static Result Prepare( Input input, int maxJoints = int.MaxValue )
+	/// <summary>Upstream's preparation of <paramref name="input"/>.</summary>
+	public static Result Prepare( Input input )
 	{
 		var n = input.Names.Count;
 		bool Skinned( int b ) => input.SkinMax is null || input.SkinMax[b] >= SkinEps;
@@ -126,19 +119,6 @@ public static class UniMatePrep
 			if ( progress == 0 ) break;
 		}
 
-		// ---- our extension: over the joint limit, remove leaves shortest bone first (last in order on ties)
-		var trimmed = 0;
-		while ( nodes.Count > maxJoints )
-		{
-			var root = Root();
-			var leaf = nodes.Where( b => b != root && Children( b ).Count == 0 )
-				.Select( ( b, k ) => (b, k, len: (input.RestWorldPos[b] - input.RestWorldPos[parent[b]]).Length()) )
-				.OrderBy( t => t.len ).ThenByDescending( t => t.k ).Select( t => t.b ).FirstOrDefault( -1 );
-			if ( leaf < 0 ) break;
-			nodes.Remove( leaf );
-			trimmed++;
-		}
-
 		var index = new Dictionary<int, int>();
 		for ( var i = 0; i < nodes.Count; i++ ) index[nodes[i]] = i;
 		var parents = nodes.Select( b => parent[b] >= 0 && index.TryGetValue( parent[b], out var p ) ? p : -1 ).ToArray();
@@ -148,7 +128,7 @@ public static class UniMatePrep
 		return new Result
 		{
 			Kept = nodes.ToArray(), Parents = parents, RawNames = raw, CleanNames = clean,
-			FaceRight = fr, FaceLeft = fl, BodyAxis = bodyAxis, FaceSource = source, TrimmedLeaves = trimmed,
+			FaceRight = fr, FaceLeft = fl, BodyAxis = bodyAxis, FaceSource = source,
 		};
 	}
 

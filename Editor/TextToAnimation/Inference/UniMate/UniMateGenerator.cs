@@ -40,11 +40,11 @@ public sealed class UniMateGenerator : IMotionGenerator
 
 	public IReadOnlyList<string> Validate( MotionRig rig ) => UniMateRig.Validate( rig );
 
-	public RigFamily DetectFamily( MotionRig rig ) => UniMateRig.DetectFamily( rig );
+	public RigFamily DetectFamily( MotionRig rig ) => UniMateRig.DefaultFamily;
 
 	(UniMateRig Rig, PreparedSkeleton Prep) Prepare( MotionRig rig, RigFamily family, CancellationToken token )
 	{
-		if ( family == RigFamily.Auto ) family = UniMateRig.DetectFamily( rig );
+		if ( family == RigFamily.Auto ) family = UniMateRig.DefaultFamily;
 		var key = AnimationWorkspace.Fingerprint( rig.Skeleton ) + rig.Skeleton.RestWorld.Sum( x => x.Pos.X + x.Pos.Y * 3 + x.Pos.Z * 7 ).ToString( "R" ) + "|" + family;
 		lock ( _lock )
 		{

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Editor;
 
@@ -39,6 +40,28 @@ public static class VmdlSources
 		return null;
 	}
 
+	/// <summary>The text of every .vmdl_prefab the vmdl includes (recursively, each once).</summary>
+	public static List<string> IncludedPrefabTexts( string vmdlText, string vmdl )
+	{
+		var texts = new List<string>();
+		var seen = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
+		void Scan( string text, int depth )
+		{
+			if ( string.IsNullOrEmpty( text ) || depth > 8 ) return;
+			foreach ( Match m in Regex.Matches( text, @"target_file\s*=\s*""([^""]+\.vmdl_prefab)""" ) )
+			{
+				if ( !seen.Add( m.Groups[1].Value ) || Resolve( m.Groups[1].Value, vmdl ) is not { } prefab ) continue;
+				string sub = null;
+				try { sub = File.ReadAllText( prefab ); } catch ( IOException ) { }
+				if ( sub is null ) continue;
+				texts.Add( sub );
+				Scan( sub, depth + 1 );
+			}
+		}
+		Scan( vmdlText, 0 );
+		return texts;
+	}
+
 	/// <summary>
 	/// Bones the model's own animation constraints drive at runtime (AnimConstraintSlave targets in the vmdl and
 	/// the prefabs it includes): whatever a sequence stores for them, the game shows the constraint's result.
@@ -46,21 +69,9 @@ public static class VmdlSources
 	public static HashSet<string> ConstraintDrivenBones( string vmdlText, string vmdl )
 	{
 		var driven = new HashSet<string>( StringComparer.Ordinal );
-		var seen = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
-		void Scan( string text, int depth )
-		{
-			if ( string.IsNullOrEmpty( text ) || depth > 8 ) return;
-			foreach ( Match m in Regex.Matches( text, @"_class\s*=\s*""AnimConstraintSlave""[^{}]*?parent_bone\s*=\s*""([^""]+)""", RegexOptions.Singleline ) )
+		foreach ( var text in IncludedPrefabTexts( vmdlText, vmdl ).Prepend( vmdlText ) )
+			foreach ( Match m in Regex.Matches( text ?? "", @"_class\s*=\s*""AnimConstraintSlave""[^{}]*?parent_bone\s*=\s*""([^""]+)""", RegexOptions.Singleline ) )
 				driven.Add( m.Groups[1].Value );
-			foreach ( Match m in Regex.Matches( text, @"target_file\s*=\s*""([^""]+\.vmdl_prefab)""" ) )
-			{
-				if ( !seen.Add( m.Groups[1].Value ) || Resolve( m.Groups[1].Value, vmdl ) is not { } prefab ) continue;
-				string sub = null;
-				try { sub = File.ReadAllText( prefab ); } catch ( IOException ) { }
-				Scan( sub, depth + 1 );
-			}
-		}
-		Scan( vmdlText, 0 );
 		return driven;
 	}
 }

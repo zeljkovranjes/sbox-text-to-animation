@@ -69,7 +69,7 @@ public class AnyArmatureTests
         var s = rig.Skeleton;
         _out.WriteLine($"{creature}: {u.Count} joints, family {u.Family}, facing {u.Skeleton.RightHip}/{u.Skeleton.LeftHip} ({u.Prep.FaceSource}) body axis {u.Skeleton.BodyAxis}");
         _out.WriteLine(string.Join(", ", u.Skeleton.CleanNames));
-        Assert.InRange(u.Count, UniMateRig.MinJoints, UniMateRig.MaxJoints);
+        Assert.True(u.Count >= UniMateRig.MinJoints);
         Assert.All(u.Bone, b => Assert.InRange(b, 0, s.Count - 1));
         Assert.Equal(u.Count, u.Bone.Distinct().Count());
         Assert.All(u.Skeleton.CleanNames, n => Assert.False(string.IsNullOrWhiteSpace(n)));
@@ -122,20 +122,14 @@ public class AnyArmatureTests
         Assert.Equal(rename("pelvis"), renamed.Skeleton[renamed.HipsIndex].Name);
     }
 
-    /// <summary>Over the checkpoint's joint limit, leaves are trimmed shortest first (the port's one extension).</summary>
+    /// <summary>Rigs bigger than any training skeleton run whole: the network has no per-joint limit.</summary>
     [Fact]
-    public void LongRigsAreTrimmedToTheJointBudget()
+    public void LongRigsKeepEveryBone()
     {
         var rig = Rig("dragon");
-        Assert.True(rig.Skeleton.Count > UniMateRig.MaxJoints);
+        Assert.True(rig.Skeleton.Count > UniMateRig.TrainedMaxJoints);
         var u = UniMateRig.Build(rig);
-        Assert.Equal(UniMateRig.MaxJoints, u.Count);
-        Assert.Equal(rig.Skeleton.Count - UniMateRig.MaxJoints, u.Prep.TrimmedLeaves);
-        // only leaves went: every kept bone's kept ancestors chain up to the root unbroken
-        var kept = u.Bone.ToHashSet();
-        foreach (var b in u.Bone)
-            for (var p = rig.Skeleton[b].ParentIndex; p >= 0; p = rig.Skeleton[p].ParentIndex)
-                Assert.Contains(p, kept);
+        Assert.Equal(rig.Skeleton.Count, u.Count); // no skin data attached: nothing is pruned
     }
 
     [Theory]

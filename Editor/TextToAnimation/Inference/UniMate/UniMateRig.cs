@@ -30,8 +30,12 @@ public sealed class UniMateRig
 
 	public int Count => Skeleton.Count;
 
-	/// <summary>The checkpoint's training limit (max_joints in the released uniml3d_f60_v2 config.json); bigger rigs are trimmed to it.</summary>
-	public const int MaxJoints = 71;
+	/// <summary>
+	/// The largest skeleton in the checkpoint's training data (max_joints in the released config). Only a padding
+	/// size upstream: the network has no per-joint weights (spectral RoPE, shared output heads), so bigger rigs run
+	/// whole rather than losing bones.
+	/// </summary>
+	public const int TrainedMaxJoints = 71;
 
 	/// <summary>The checkpoint's training minimum (uniml3d config min_joints).</summary>
 	public const int MinJoints = 5;
@@ -64,17 +68,12 @@ public sealed class UniMateRig
 		return problems;
 	}
 
-	/// <summary>The training family a rig's motion resembles: humans (Mixamo), animals and creatures (Truebones), anything else (Objaverse).</summary>
-	public static RigFamily DetectFamily( MotionRig rig )
-	{
-		var a = rig.Analysis;
-		if ( a.IsHumanoid ) return RigFamily.Humanoid;
-		if ( a.Limbs.Any( l => l.Kind is LimbKind.Leg or LimbKind.FrontLeg or LimbKind.Wing )
-			|| a.Tails.Any( t => t.Count > 0 && a.Part[t[0]] == RigPart.Tail )
-			|| a.Facing == RigFacing.BodyAxis )
-			return RigFamily.Animal;
-		return RigFamily.Object;
-	}
+	/// <summary>
+	/// The statistics family for a rig when none is chosen. Upstream normalises with the statistics of the dataset a
+	/// skeleton came from; a new rig comes through upstream's generic asset pipeline (the Objaverse export path this
+	/// port follows), so it gets the Objaverse statistics - whatever kind of creature it is.
+	/// </summary>
+	public const RigFamily DefaultFamily = RigFamily.Object;
 
 	/// <summary>
 	/// Prepares a rig like upstream prepares its training rigs: pruning helpers by skin weight, clean names and
@@ -94,7 +93,7 @@ public sealed class UniMateRig
 			RestWorldPos = Enumerable.Range( 0, s.Count ).Select( b => rest[b].Pos ).ToList(),
 			SkinMax = weights is null ? null : Enumerable.Range( 0, s.Count ).Select( b => W( b ).Max ).ToList(),
 			SkinSum = weights is null ? null : Enumerable.Range( 0, s.Count ).Select( b => W( b ).Sum ).ToList(),
-		}, MaxJoints );
+		} );
 		if ( prep.Kept.Length < MinJoints )
 			throw new InvalidOperationException( $"Only {prep.Kept.Length} bones of this skeleton deform the mesh; UniMate was trained on skeletons with at least {MinJoints}." );
 		UniMateSkeleton skeleton;
@@ -105,7 +104,7 @@ public sealed class UniMateRig
 				UniMateSkeleton.EngineCanonicalBasis, bodyAxis: prep.BodyAxis );
 		}
 		catch ( ArgumentException e ) { throw new InvalidOperationException( e.Message, e ); }
-		if ( family == RigFamily.Auto ) family = DetectFamily( rig );
+		if ( family == RigFamily.Auto ) family = DefaultFamily;
 		var bone = skeleton.SourceIndex.Select( i => prep.Kept[i] ).ToArray();
 		return new UniMateRig( rig, skeleton, bone, new Vector3[bone.Length], family ) { Prep = prep };
 	}

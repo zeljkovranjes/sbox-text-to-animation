@@ -270,6 +270,30 @@ public static class EditorGate
 		session.Status -= OnSaveStatus;
 		await EngineThread.SwitchToMainThread();
 		Check( "save to vmdl compiles and plays back", saved, $"{toSave.EffectiveSequenceName}: {saveStatus}" );
+		if ( saved && ModelBridge.SourcePathOf( session.ModelAsset ) is { } savedVmdl )
+		{
+			// how the engine treats bones the model's own constraints drive (diagnostic for the editor preview)
+			var driven = VmdlSources.ConstraintDrivenBones( File.ReadAllText( savedVmdl ), savedVmdl );
+			await EngineThread.DelayOnMain( 500 );
+			// the engine's own pose (animation + constraints) while playing the saved sequence: ground truth for the
+			// constraint evaluator (dev/Tests reads it as a fixture)
+			var vmdlText = File.ReadAllText( savedVmdl );
+			var attachments = System.Text.RegularExpressions.Regex.Matches( vmdlText + string.Join( "\n", VmdlSources.IncludedPrefabTexts( vmdlText, savedVmdl ) ), @"parent_attachment\s*=\s*""([^""]+)""" ).Select( m => m.Groups[1].Value ).Distinct().ToList();
+			var poses = window.Viewport.EnginePoses( toSave.EffectiveSequenceName, Enumerable.Range( 0, toSave.FrameCount ).Where( f => f % 3 == 0 ), toSave.Fps, attachments );
+			File.WriteAllText( Path.Combine( Path.GetDirectoryName( _resultPath )!, "gate_shots", "engine_constraint_truth.json" ), JsonSerializer.Serialize( new { model = session.ModelAsset.Path, vmdl = vmdlText, prefabs = VmdlSources.IncludedPrefabTexts( vmdlText, savedVmdl ), driven, poses } ) );
+			Note( $"engine constraint truth: {driven.Count} driven bones, {attachments.Count} attachments" );
+			// the preview of a saved clip shows the game's constraint result on the bones the model itself drives
+			window.Viewport.ConstraintDriven = driven;
+			session.SelectClip( toSave );
+			var worstDriven = 0f;
+			foreach ( var f in new[] { 10, 25, 40 } )
+			{
+				session.Seek( f );
+				await EngineThread.DelayOnMain( 100 );
+				worstDriven = MathF.Max( worstDriven, window.Viewport.PreviewVsGameOnDrivenBones( toSave.EffectiveSequenceName, "pelvis" ) );
+			}
+			Check( "a saved clip's preview matches the game on constraint-driven bones", window.Viewport.UsedEngineConstraints && worstDriven < 0.05f, $"{driven.Count} bones, max {worstDriven:0.000} in, used {window.Viewport.UsedEngineConstraints}; {window.Viewport.LastDrivenReport}" );
+		}
 		await session.RefreshModelAsync();
 		Check( "saved sequence is in the model", session.Model.AnimationNames.Contains( toSave.EffectiveSequenceName ) );
 
@@ -647,7 +671,7 @@ public static class EditorGate
 			var a = rig.Analysis;
 			report[creature.Name] = new
 			{
-				bones = rig.Skeleton.Count, humanoid = rig.IsHumanoid, family = Inference.UniMate.UniMateRig.DetectFamily( rig ).ToString(), facing = a.Facing.ToString(),
+				bones = rig.Skeleton.Count, humanoid = rig.IsHumanoid, family = Inference.UniMate.UniMateRig.DefaultFamily.ToString(), facing = a.Facing.ToString(),
 				limbs = a.Limbs.Select( l => $"{l.Kind} {l.Side}: {l.Chain.Count}" ).ToList(), problems = rig.Problems.ToList(),
 			};
 			Set( "creatures", report );
@@ -821,7 +845,6 @@ public static class EditorGate
 				joints = Enumerable.Range( 0, u.Count ).Select( i => $"{s[u.Bone[i]].Name} = {u.Skeleton.CleanNames[i]}" ).ToList(),
 				facing = u.Skeleton.RightHip < 0 ? "none (identity)" : $"{s[u.Bone[u.Skeleton.RightHip]].Name} / {s[u.Bone[u.Skeleton.LeftHip]].Name}{(u.Skeleton.BodyAxis ? " (body axis)" : "")}",
 				facingRule = u.Prep.FaceSource,
-				trimmedLeaves = u.Prep.TrimmedLeaves,
 				family = u.Family.ToString(),
 			};
 		}

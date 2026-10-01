@@ -683,6 +683,10 @@ public sealed class TextToAnimationWindow : Widget
 		if ( (change & SessionChange.Model) != 0 && Session.Model is not null )
 		{
 			Viewport.SetModel( Session.Model );
+			// bones the model's own constraints drive: the view shows the engine's result for them once a clip is saved
+			var vmdl = Session.ModelAsset is null ? null : ModelBridge.SourcePathOf( Session.ModelAsset );
+			Viewport.ConstraintDriven = vmdl is null || Session.VmdlText is null ? new HashSet<string>()
+				: EngineThread.Try( () => VmdlSources.ConstraintDrivenBones( Session.VmdlText, vmdl ) ) ?? new HashSet<string>();
 		}
 	}
 
