@@ -16,6 +16,7 @@
     <!-- Editor-assembly code with no Sandbox dependency (workspace store, inference runtime) -->
     <Compile Include="..\..\Editor\TextToAnimation\Workspace\**\*.cs" LinkBase="EditorCore\Workspace" />
     <Compile Include="..\..\Editor\TextToAnimation\Formats\**\*.cs" LinkBase="EditorCore\Formats" />
+    <Compile Include="..\..\Editor\TextToAnimation\Mapping\**\*.cs" LinkBase="EditorCore\Mapping" />
     <Compile Include="..\..\Editor\TextToAnimation\Inference\**\*.cs" LinkBase="EditorCore\Inference" />
     <Compile Include="..\..\Editor\TextToAnimation\Generation\**\*.cs" LinkBase="EditorCore\Generation" />
   </ItemGroup>

@@ -93,6 +93,24 @@ public sealed class UniMateRig
 	/// <summary>Mixamo's word for a joint where people rigs differ ("Left Ankle" is Mixamo's "Left Foot").</summary>
 	static string PeopleName( string clean ) => clean.Replace( "Ankle", "Foot" );
 
+	/// <summary>The Mixamo body's joint name for a humanoid role (fingers and twists have none: they follow).</summary>
+	static string MixamoNameOf( Mapping.BoneRole role ) => role switch
+	{
+		Mapping.BoneRole.Hips => "Hips",
+		Mapping.BoneRole.Spine0 or Mapping.BoneRole.Spine1 or Mapping.BoneRole.Spine2 or Mapping.BoneRole.Spine3 or Mapping.BoneRole.Spine4 => "Spine",
+		Mapping.BoneRole.Neck => "Neck",
+		Mapping.BoneRole.Head => "Head",
+		Mapping.BoneRole.ClavicleL => "Left Shoulder", Mapping.BoneRole.ClavicleR => "Right Shoulder",
+		Mapping.BoneRole.UpperArmL => "Left Upper Arm", Mapping.BoneRole.UpperArmR => "Right Upper Arm",
+		Mapping.BoneRole.LowerArmL => "Left Forearm", Mapping.BoneRole.LowerArmR => "Right Forearm",
+		Mapping.BoneRole.HandL => "Left Hand", Mapping.BoneRole.HandR => "Right Hand",
+		Mapping.BoneRole.UpperLegL => "Left Thigh", Mapping.BoneRole.UpperLegR => "Right Thigh",
+		Mapping.BoneRole.LowerLegL => "Left Shin", Mapping.BoneRole.LowerLegR => "Right Shin",
+		Mapping.BoneRole.FootL => "Left Foot", Mapping.BoneRole.FootR => "Right Foot",
+		Mapping.BoneRole.ToeL => "Left Toe", Mapping.BoneRole.ToeR => "Right Toe",
+		_ => "",
+	};
+
 	/// <summary>Words upstream's name rule gives finger bones.</summary>
 	static readonly HashSet<string> FingerWords = new( StringComparer.Ordinal ) { "Finger", "Thumb" };
 
@@ -148,8 +166,16 @@ public sealed class UniMateRig
 		var weights = UniMateSkin.WeightsOf( s );
 		var objectType = UniMateSkin.ObjectTypeOf( s );
 		var driven = UniMateSkin.DrivenOf( s );
+		// a person rig of a known convention (humanoid-retargeter's profiles: Mixamo, UE mannequin, Rigify, DAZ, VRM,
+		// Biped, SMPL, ...): every body bone's role, so its Mixamo joint name comes from what it is, not how it's spelled
+		// Only for a rig that is a person by its shape: animals are rigged with person conventions too (Truebones' dog,
+		// bear, ... use 3ds Max Biped names), so a profile names a person's bones but never decides that it is one
 		if ( family == RigFamily.Auto ) family = DetectFamily( rig );
-		string PeopleNameOf( int b ) => PeopleName( UniMateVocabulary.Align( UniMateNames.Clean( s[b].Name, objectType ) ) );
+		var profile = peopleBody && family == RigFamily.Humanoid ? Mapping.ProfileDetector.Detect( s ) : null;
+		var roleOf = profile?.Result.RoleToBone.ToDictionary( kv => kv.Value, kv => kv.Key ) ?? new Dictionary<int, Mapping.BoneRole>();
+		string PeopleNameOf( int b ) => profile is not null
+			? (roleOf.TryGetValue( b, out var role ) ? MixamoNameOf( role ) : "")
+			: PeopleName( UniMateVocabulary.Align( UniMateNames.Clean( s[b].Name, objectType ) ) );
 		var mixamoBody = peopleBody && family == RigFamily.Humanoid
 			&& MixamoCore.IsSubsetOf( Enumerable.Range( 0, s.Count ).Where( b => !driven.Contains( s[b].Name ) ).Select( PeopleNameOf ) );
 		var posed = mixamoBody ? ArmsInTPose( rig ) : null;
@@ -212,7 +238,7 @@ public sealed class UniMateRig
 			}
 			if ( alignVocabulary )
 			{
-				var aligned = names.Select( UniMateVocabulary.Align ).Select( n => mixamoBody ? PeopleName( n ) : n ).ToArray();
+				var aligned = mixamoBody ? prep.Kept.Select( PeopleNameOf ).ToArray() : names.Select( UniMateVocabulary.Align ).ToArray();
 				if ( !aligned.SequenceEqual( names ) )
 				{
 					names = aligned;
