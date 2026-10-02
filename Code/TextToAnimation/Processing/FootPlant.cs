@@ -28,6 +28,12 @@ public sealed class FootPlantOptions
 
     /// <summary>Maximum allowed per-segment length stretch (fraction; 0.02 = 2%).</summary>
     public float MaxStretch { get; set; } = 0.02f;
+
+    /// <summary>
+    /// A plant is only kept when its foot strays from the plant's anchor by at most this fraction of the leg's length
+    /// (horizontally): a foot gliding further is not standing, and holding it would drag the leg (unlimited by default).
+    /// </summary>
+    public float MaxPlantDrift { get; set; } = float.PositiveInfinity;
 }
 
 /// <summary>A leg chain identified by skeleton bone indices.</summary>
@@ -254,6 +260,25 @@ public static class FootPlant
     {
         // (b) Detection with hysteresis + minimum duration.
         var plants = DetectPlants(ankle, up, ground, fps, options);
+        if (!float.IsPositiveInfinity(options.MaxPlantDrift))
+        {
+            var rest = skeleton.RestWorld;
+            var leg = Vector3.Distance(rest[chain.Hip].Pos, rest[chain.Knee].Pos) + Vector3.Distance(rest[chain.Knee].Pos, rest[chain.Ankle].Pos);
+            plants = plants.Where(p =>
+            {
+                var mean = Vector3.Zero;
+                for (int f = p.Start; f <= p.End; f++) mean += ankle[f];
+                mean /= p.Length;
+                var drift = 0f;
+                for (int f = p.Start; f <= p.End; f++)
+                {
+                    var d = ankle[f] - mean;
+                    d -= Vector3.Dot(d, up) * up;
+                    drift = MathF.Max(drift, d.Length());
+                }
+                return drift <= options.MaxPlantDrift * leg;
+            }).ToList();
+        }
         report.Plants.AddRange(plants);
         if (plants.Count == 0)
             return;

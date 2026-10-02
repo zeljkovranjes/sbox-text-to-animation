@@ -62,7 +62,13 @@ public static class ClipCleanup
             var report = FootPlant.Apply(frames, rig.Skeleton, feet[0], feet[1], rig.Up, fps, options);
             plants = report.Left.Plants.Count + report.Right.Plants.Count;
         }
-        else plants = FootPlant.ApplyAll(frames, rig.Skeleton, feet, rig.Up, fps, options).Sum(f => f.Plants.Count);
+        else
+        {
+            // a creature's generated feet often glide rather than stand (UniMate on rigs unlike its data): only feet
+            // that really stand are held, so a leg is never dragged into another
+            options.MaxPlantDrift = PlantDrift;
+            plants = FootPlant.ApplyAll(frames, rig.Skeleton, feet, rig.Up, fps, options).Sum(f => f.Plants.Count);
+        }
         return plants > 0 ? $"Smoothed; {plants} foot plants locked." : "Smoothed.";
     }
 
@@ -100,6 +106,9 @@ public static class ClipCleanup
             }
         }
     }
+
+    /// <summary>How far (a fraction of the leg's length) a creature's foot may stray during a plant for it to be held.</summary>
+    public const float PlantDrift = 0.15f;
 
     /// <summary>Gaussian smoothing of every bone's local transform over time (edges clamped; rotations averaged in one hemisphere).</summary>
     public static List<XForm[]> Smooth(IReadOnlyList<XForm[]> frames, float sigma)
