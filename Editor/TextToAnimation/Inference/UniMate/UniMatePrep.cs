@@ -34,6 +34,11 @@ public static class UniMatePrep
 		public IReadOnlyList<double> SkinMax { get; init; }
 		/// <summary>Per bone: the sum of its vertex weights (upstream picks the main root by it); null when unknown.</summary>
 		public IReadOnlyList<double> SkinSum { get; init; }
+		/// <summary>
+		/// Graft secondary roots that deform the mesh onto the main tree (the port's extension; upstream drops them).
+		/// Off reproduces upstream exactly.
+		/// </summary>
+		public bool GraftSkinnedRoots { get; init; } = true;
 	}
 
 	public sealed class Result
@@ -49,6 +54,8 @@ public static class UniMatePrep
 		public int FaceLeft { get; init; } = -1;
 		public bool BodyAxis { get; init; }
 		public string FaceSource { get; init; } = "empty";
+		/// <summary>Skinned secondary roots grafted onto the main tree: input bone -> the input bone it now hangs off.</summary>
+		public IReadOnlyDictionary<int, int> Grafts { get; init; } = new Dictionary<int, int>();
 	}
 
 	/// <summary>Upstream's preparation of <paramref name="input"/>.</summary>
@@ -60,6 +67,7 @@ public static class UniMatePrep
 		// the working skeleton: input indices in order, with parents as input indices
 		var nodes = Enumerable.Range( 0, n ).ToList();
 		var parent = input.Parents.ToArray();
+		var grafts = new Dictionary<int, int>();
 
 		// ---- prune_secondary_roots: keep the root whose subtree carries the most skin weight (first on ties)
 		// (without skin weights: the root with the most bones under it)
@@ -69,6 +77,21 @@ public static class UniMatePrep
 			double SubtreeWeight( int r ) => nodes.Where( b => RootOf( parent, b ) == r ).Sum( b => input.SkinSum is null ? 1.0 : input.SkinSum[b] );
 			var best = roots[0]; var bestW = SubtreeWeight( best );
 			foreach ( var r in roots.Skip( 1 ) ) { var w = SubtreeWeight( r ); if ( w > bestW ) { best = r; bestW = w; } }
+			// extension: a secondary root whose bones deform the mesh is part of the body, rigged without a parent
+			// (a spider whose legs hang off the armature object, not its body bone). Upstream drops it - meant for
+			// IK targets and helpers, which carry no skin - and the creature would lose its legs; it is grafted onto
+			// the nearest skinned body segment of the main tree instead, keeping its rest offset. Unskinned roots go as upstream.
+			var main = nodes.Where( b => RootOf( parent, b ) == best ).ToList();
+			// a body segment, not an end bone: a leg must not hang off a fang or a fingertip
+			var anchors = main.Where( b => Skinned( b ) && main.Any( c => parent[c] == b ) ).DefaultIfEmpty( best ).ToList();
+			if ( input.GraftSkinnedRoots && input.SkinMax is not null && input.RestWorldPos is not null )
+				foreach ( var r in roots.Where( r => r != best ) )
+				{
+					if ( !nodes.Any( b => RootOf( parent, b ) == r && input.SkinMax[b] >= SkinEps ) ) continue;
+					var at = anchors.OrderBy( a => Vector3.DistanceSquared( input.RestWorldPos[a], input.RestWorldPos[r] ) ).ThenBy( a => a ).First();
+					grafts[r] = at;
+				}
+			foreach ( var (r, at) in grafts ) parent[r] = at;
 			nodes = nodes.Where( b => RootOf( parent, b ) == best ).ToList();
 		}
 
@@ -128,7 +151,7 @@ public static class UniMatePrep
 		return new Result
 		{
 			Kept = nodes.ToArray(), Parents = parents, RawNames = raw, CleanNames = clean,
-			FaceRight = fr, FaceLeft = fl, BodyAxis = bodyAxis, FaceSource = source,
+			FaceRight = fr, FaceLeft = fl, BodyAxis = bodyAxis, FaceSource = source, Grafts = grafts,
 		};
 	}
 

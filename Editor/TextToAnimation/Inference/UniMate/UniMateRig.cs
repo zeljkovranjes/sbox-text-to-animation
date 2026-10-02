@@ -370,6 +370,11 @@ public sealed class UniMateRig
 		for ( var a = rootBone >= 0 ? s[rootBone].ParentIndex : -1; a >= 0; a = s[a].ParentIndex ) ancestors.Add( a );
 		var restWorld = s.RestWorld;
 		var up = Motion.Up;
+		// skinned secondary roots grafted onto the body (UniMatePrep): they follow the bone they hang off, at their
+		// rest offset from it, so they come after it; everything else in index order (parents first)
+		var grafts = Prep?.Grafts ?? new Dictionary<int, int>();
+		int TopOf( int b ) { while ( s[b].ParentIndex >= 0 ) b = s[b].ParentIndex; return b; }
+		var order = Enumerable.Range( 0, s.Count ).OrderBy( b => grafts.ContainsKey( TopOf( b ) ) ? 1 : 0 ).ThenBy( b => b ).ToArray();
 		for ( var t = 0; t < T; t++ )
 		{
 			Array.Clear( desiredWorld );
@@ -384,12 +389,17 @@ public sealed class UniMateRig
 			{
 				MathQ.SwingTwist( Quaternion.Normalize( rootRot * Quaternion.Conjugate( restWorld[rootBone].Rot ) ), up, out _, out carry );
 			}
-			for ( var b = 0; b < s.Count; b++ )
+			foreach ( var b in order )
 			{
 				var local = src?[b] ?? s[b].RestLocal;
 				var parent = s[b].ParentIndex;
 				var parentWorld = parent < 0 ? XForm.Identity : world[parent];
-				if ( ancestors.Contains( b ) && parent < 0 )
+				if ( parent < 0 && grafts.TryGetValue( b, out var host ) )
+				{
+					var follow = XForm.Compose( world[host], XForm.ToLocal( restWorld[host], restWorld[b] ) );
+					local = desiredWorld[b] is { } gr ? new XForm( follow.Pos, gr ) : follow;
+				}
+				else if ( ancestors.Contains( b ) && parent < 0 )
 				{
 					var wantRot = Quaternion.Normalize( carry * restWorld[b].Rot );
 					var wantPos = motion.RootPos[t] + Vector3.Transform( restWorld[b].Pos - restWorld[rootBone].Pos, carry );

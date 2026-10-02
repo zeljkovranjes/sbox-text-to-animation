@@ -339,6 +339,89 @@ public sealed class RigAnalysis
         MirrorOffset = lats[lats.Count / 2];
         var offPlane = bones.Count(b => MathF.Abs(Lateral(b)) > 0.01f * Size);
         Symmetric = bestCost < 0.012f * Size && offPlane >= 2;
+        if (!Symmetric) FindStructuralMirror(bones);
+    }
+
+    /// <summary>Partners paired by structure when the rest pose is not mirror-symmetric (null otherwise).</summary>
+    int[]? _structuralMirror;
+    /// <summary>Roots of the structurally paired subtrees.</summary>
+    readonly List<int> _structuralRoots = new();
+
+    /// <summary>
+    /// A rig whose rest pose is not mirror-symmetric (Truebones animals rest mid-stride) is still symmetric in its
+    /// structure: two sibling subtrees with the same branching and the same bone lengths - joint distances, whatever
+    /// the pose - are left and right partners. The mirror plane is the one their attachment points (rigid on the
+    /// body in any pose) reflect onto each other through. Groups of more than two alike siblings (tentacles) are
+    /// ambiguous and left unpaired.
+    /// </summary>
+    void FindStructuralMirror(List<int> bones)
+    {
+        var pairs = new List<(int A, int B)>();
+        foreach (var p in bones)
+        {
+            var kids = BodyChildren(p).Where(k => BodySubtree(k).Count() >= 2).ToList();
+            foreach (var a in kids)
+            {
+                var alike = kids.Where(b => b != a && Alike(a, b)).ToList();
+                if (alike.Count == 1 && a < alike[0] && !kids.Any(c => c != a && c != alike[0] && Alike(a, c))) pairs.Add((a, alike[0]));
+            }
+        }
+        // the plane through which every pair's attachment points reflect onto each other
+        var normal = Vector3.Zero;
+        foreach (var (a, b) in pairs)
+        {
+            var d = _p[a] - _p[b];
+            d.Z = 0;
+            if (d.Length() < 0.005f * Size) continue;
+            normal += Vector3.Dot(d, normal) < 0 ? -d : d;
+        }
+        if (normal.LengthSquared() < 1e-12f) return;
+        normal = SnapAxis(Vector3.Normalize(normal));
+        var offset = pairs.Average(pr => Vector3.Dot(normal, (_p[pr.A] + _p[pr.B]) * 0.5f));
+        pairs = pairs.Where(pr =>
+        {
+            var la = Vector3.Dot(normal, _p[pr.A]) - offset;
+            var reflected = _p[pr.A] - 2f * la * normal;
+            return MathF.Abs(la) > 0.005f * Size && (reflected - _p[pr.B]).Length() < 0.05f * Size;
+        }).ToList();
+        if (pairs.Count == 0) return;
+        MirrorNormal = normal;
+        MirrorOffset = offset;
+        Symmetric = true;
+        _structuralMirror = Enumerable.Range(0, Skeleton.Count).ToArray();
+        foreach (var (a, b) in pairs)
+        {
+            _structuralRoots.Add(a);
+            _structuralRoots.Add(b);
+            Match(a, b);
+        }
+
+        void Match(int a, int b)
+        {
+            _structuralMirror[a] = b;
+            _structuralMirror[b] = a;
+            var ka = OrderedChildren(a);
+            var kb = OrderedChildren(b);
+            for (var i = 0; i < ka.Count; i++) Match(ka[i], kb[i]);
+        }
+    }
+
+    List<int> OrderedChildren(int bone) => BodyChildren(bone)
+        .OrderByDescending(k => BodySubtree(k).Count()).ThenByDescending(SegmentLength).ThenBy(k => k).ToList();
+
+    float SegmentLength(int bone) => Skeleton[bone].ParentIndex < 0 ? 0f : (_p[bone] - _p[Skeleton[bone].ParentIndex]).Length();
+
+    /// <summary>Same branching and bone lengths below (and including) the two bones.</summary>
+    bool Alike(int a, int b)
+    {
+        float la = SegmentLength(a), lb = SegmentLength(b);
+        if (MathF.Abs(la - lb) > 0.01f * Size + 0.05f * MathF.Max(la, lb)) return false;
+        var ka = OrderedChildren(a);
+        var kb = OrderedChildren(b);
+        if (ka.Count != kb.Count) return false;
+        for (var i = 0; i < ka.Count; i++)
+            if (!Alike(ka[i], kb[i])) return false;
+        return true;
     }
 
     static Vector3 SnapAxis(Vector3 v)
@@ -353,6 +436,11 @@ public sealed class RigAnalysis
     {
         if (!Symmetric) return;
         var bones = BodyBones();
+        if (_structuralMirror is not null)
+        {
+            foreach (var b in bones) Mirror[b] = _structuralMirror[b];
+            return;
+        }
         Pair(bones, Mirror);
         if (!bones.Any(b => Mirror[b] != b)) Symmetric = false;
     }
@@ -497,6 +585,18 @@ public sealed class RigAnalysis
     {
         var tc = 0.01f * Size;
         var leftSign = Vector3.Dot(Left, MirrorNormal) >= 0 ? 1f : -1f;
+        if (_structuralMirror is not null)
+        {
+            // paired by structure: a whole limb takes the side it attaches on (its far end may cross the middle
+            // in the rest pose); everything else is the centre
+            for (var b = 0; b < Skeleton.Count; b++) Side[b] = BoneSide.Center;
+            foreach (var r in _structuralRoots)
+            {
+                var side = Lateral(r) * leftSign > 0 ? BoneSide.Left : BoneSide.Right;
+                foreach (var b in BodySubtree(r)) Side[b] = side;
+            }
+            return;
+        }
         for (var b = 0; b < Skeleton.Count; b++)
         {
             if (!InBody[b] || !Symmetric) { Side[b] = BoneSide.Center; continue; }

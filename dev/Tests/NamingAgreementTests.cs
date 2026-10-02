@@ -90,17 +90,24 @@ public class NamingAgreementTests
         {
             int same = 0, total = 0, faces = 0, n = 0, errors = 0, left = 0;
             var worst = new List<(string, double, List<string>)>();
+            var leftOf = new Dictionary<string, int>();
             foreach (var e in all.Where(x => x.dataset == ds))
             {
                 var s = Score(e, out var diffs, out var lo);
+                leftOf[e.key] = lo;
                 n++; left += lo; same += s.Same; total += s.Total; if (s.FaceSame) faces++; if (s.Error is not null) errors++;
                 worst.Add((e.key, (double)s.Same / s.Total, diffs));
             }
+            // T2A_AGREE_DUMP=<file>: every rig's agreement, to compare two versions rig by rig
+            if (Environment.GetEnvironmentVariable("T2A_AGREE_DUMP") is { Length: > 0 } dumpFile)
+                File.AppendAllLines(dumpFile, worst.Select(w => $"{ds} {w.Item1} {w.Item2:0.000} {leftOf[w.Item1]}"));
             _out.WriteLine($"{ds}: {n} skeletons, joint names agree {100.0 * same / total:0.0}% ({same}/{total}), facing agrees on {faces}/{n}, {errors} failed; {left} joints of people left to the engine by design");
             foreach (var (k, rate, diffs) in worst.OrderBy(w => w.Item2).Take(6))
                 _out.WriteLine($"   {k}: {rate * 100:0}%  e.g. {string.Join("; ", diffs.Take(4))}");
-            // measured 2026-10-02 with the held-out table: 96.4% / 91.3%, facing 65 / 184 (rule stage alone: 91.1% / 87.0%, facing 65 / 178)
-            var (minNames, minFaces) = ds == "truebones" ? (0.963, 65) : (0.912, 184);
+            // measured 2026-10-02 with the held-out table: 96.4% / 91.3%, facing 65 / 184 (rule stage alone: 91.1% / 87.0%, facing 65 / 178).
+            // Objaverse 91.2% since 11 more of its people (posed rests, paired by structure) are read as people: their
+            // fingers (344 joints, all agreeing) go to the engine by design and leave the score; no rig's own rate changed
+            var (minNames, minFaces) = ds == "truebones" ? (0.963, 65) : (0.911, 184);
             if ((double)same / total < minNames) problems.Add($"{ds}: names agree on only {100.0 * same / total:0.0}%");
             if (faces < minFaces) problems.Add($"{ds}: facing agrees on only {faces}/{n}");
         }

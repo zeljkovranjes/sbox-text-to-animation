@@ -86,6 +86,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 			var seed = request.Seed + take * 7919;
 			var notes = new List<string>();
 			List<XForm[]> frames;
+			var seams = new List<int>(); // model frames where a chained window begins
 			void Report( string stage, float fraction ) => progress?.Invoke( new GenerationProgress(
 				takes > 1 ? $"{stage} (take {take + 1} of {takes})" : stage, (take + Math.Clamp( fraction, 0, 1 )) / takes ) );
 
@@ -103,6 +104,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 					while ( segments.Count * (Window - Overlap) + Overlap < wanted * UniMateModel.Fps && segments.Count < 20 )
 						segments.Add( segments[^1] );
 					frames = TextChain( uniRig, prep, segments.Select( UniMatePrompt.Caption ).ToList(), seed, steps, guidance, Report, token );
+					for ( var w = 1; w < segments.Count; w++ ) seams.Add( Window + (w - 1) * (Window - Overlap) );
 					if ( request.Mode == GenerationMode.TextToMotion && wanted > 0 )
 					{
 						var keep = Math.Clamp( (int)MathF.Round( wanted * UniMateModel.Fps ) + 1, 2, frames.Count );
@@ -115,7 +117,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 					if ( source is null ) throw new InvalidOperationException( "In-betweening needs an animation with pinned frames." );
 					if ( pins.Count < 2 ) throw new InvalidOperationException( "Pin at least two frames (the poses to keep) on the timeline." );
 					var caption = UniMatePrompt.Caption( request.Prompts.FirstOrDefault() ?? "" );
-					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, pins, null, 0f, Report, token, caption );
+					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, pins, null, 0f, Report, token, caption, seams );
 					break;
 				}
 				case GenerationMode.TextEdit:
@@ -125,7 +127,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 					if ( caption.Length == 0 ) throw new InvalidOperationException( "Describe the new motion for the unlocked bones." );
 					var keepJoints = uniRig.JointsForBones( request.KeepBones );
 					if ( keepJoints.Count == 0 ) notes.Add( "No bones were locked, so the whole body was regenerated." );
-					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, null, keepJoints, 0f, Report, token, caption );
+					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, null, keepJoints, 0f, Report, token, caption, seams );
 					break;
 				}
 				case GenerationMode.Variation:
@@ -134,7 +136,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 					var caption = UniMatePrompt.Caption( request.Prompts.FirstOrDefault() ?? "An object moves." );
 					// start part-way along the flow from a noised copy of the source (SDEdit): low strength stays close
 					var t0 = Math.Clamp( 1f - request.VariationStrength, 0.05f, 0.9f );
-					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, null, null, t0, Report, token, caption );
+					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, null, null, t0, Report, token, caption, seams );
 					break;
 				}
 				default:
@@ -149,7 +151,8 @@ public sealed class UniMateGenerator : IMotionGenerator
 			var output = Resample( frames, UniMateModel.Fps, request.OutputFps );
 			if ( request.CleanUp )
 			{
-				var cleaned = ClipCleanup.CleanGenerated( output, rig, request.OutputFps );
+				var outputSeams = seams.Select( f => (int)MathF.Round( f * request.OutputFps / UniMateModel.Fps ) ).ToList();
+				var cleaned = ClipCleanup.CleanGenerated( output, rig, request.OutputFps, outputSeams );
 				if ( cleaned.Length > 0 ) notes.Add( cleaned );
 			}
 			EnforceConstraints( output, request );
@@ -233,7 +236,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 	/// </summary>
 	List<XForm[]> Chain( UniMateRig uniRig, PreparedSkeleton prep, List<string> captions, int seed, int steps, float guidance,
 		List<XForm[]> source, List<int> pins, HashSet<int> keepJoints, float startTime,
-		Action<string, float> report, CancellationToken token, string singleCaption = null )
+		Action<string, float> report, CancellationToken token, string singleCaption = null, List<int> seams = null )
 	{
 		var J = uniRig.Count;
 		var length = source?.Count ?? (Window + (captions.Count - 1) * (Window - Overlap) + 1);
@@ -259,6 +262,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 			if ( keepJoints is not null )
 				foreach ( var j in keepJoints ) for ( var c = 0; c < 12; c++ ) for ( var f = 0; f < Window; f++ ) { keep[(j * 12 + c) * Window + f] = true; anyKeep = true; }
 			if ( w > 0 ) for ( var f = 0; f < Overlap; f++ ) KeepFrame( f );
+			if ( w > 0 ) seams?.Add( start + Overlap ); // the first frame this window adds
 
 			float[] known = null;
 			UniMateFeatures.Alignment alignment = null;

@@ -31,17 +31,22 @@ public static class ClipCleanup
     /// sigma 1.5 frames, on every bone's local transform), then planted feet locked to the floor with plants detected
     /// relative to the clip's own travel speed. Returns what it did.
     /// </summary>
-    public static string CleanGenerated(List<XForm[]> frames, MotionRig rig, float fps)
+    public static string CleanGenerated(List<XForm[]> frames, MotionRig rig, float fps, IReadOnlyList<int>? seams = null)
     {
         if (frames.Count < 5) return "";
+        // where generation windows were chained: continuous over a third of a second
+        if (seams is { Count: > 0 }) BlendSeams(frames, seams, Math.Max(2, (int)MathF.Round(fps / 3f)));
         var smoothed = Smooth(frames, 1.5f);
         for (var f = 0; f < frames.Count; f++) frames[f] = smoothed[f];
-        if (rig.LeftFoot is null || rig.RightFoot is null) return "Smoothed.";
+        var feet = rig.Feet.Count > 0 ? rig.Feet.ToList() : new List<FootChain>();
+        if (rig.IsHumanoid && rig.LeftFoot is not null && rig.RightFoot is not null) feet = new List<FootChain> { rig.LeftFoot, rig.RightFoot };
+        if (feet.Count == 0) return "Smoothed.";
+        var body = rig.HipsIndex >= 0 ? rig.HipsIndex : rig.RootIndex;
         var world = new XForm[rig.Skeleton.Count];
         FkUtil.ToWorld(frames[0], rig.Skeleton, world);
-        var start = world[rig.HipsIndex].Pos;
+        var start = world[body].Pos;
         FkUtil.ToWorld(frames[^1], rig.Skeleton, world);
-        var travel = world[rig.HipsIndex].Pos - start;
+        var travel = world[body].Pos - start;
         travel -= Vector3.Dot(travel, rig.Up) * rig.Up;
         var bodySpeed = travel.Length() / ((frames.Count - 1) / fps);
         var options = rig.PlantOptions(fps);
@@ -50,9 +55,50 @@ public static class ClipCleanup
         options.HeightThresholdCm *= 2.5f;
         // generated motion keeps every bone's length: a plant the leg can't reach stays where the leg ends
         options.MaxStretch = 0f;
-        var report = FootPlant.Apply(frames, rig.Skeleton, rig.LeftFoot, rig.RightFoot, rig.Up, fps, options);
-        var plants = report.Left.Plants.Count + report.Right.Plants.Count;
+        // every foot: locking only two of a quadruped's (its "main" pair) left the others sliding out of step
+        int plants;
+        if (feet.Count == 2 && rig.IsHumanoid)
+        {
+            var report = FootPlant.Apply(frames, rig.Skeleton, feet[0], feet[1], rig.Up, fps, options);
+            plants = report.Left.Plants.Count + report.Right.Plants.Count;
+        }
+        else plants = FootPlant.ApplyAll(frames, rig.Skeleton, feet, rig.Up, fps, options).Sum(f => f.Plants.Count);
         return plants > 0 ? $"Smoothed; {plants} foot plants locked." : "Smoothed.";
+    }
+
+    /// <summary>
+    /// Removes the jump where chained generation windows meet (UniMate's expansion pins the overlap, but the first new
+    /// frame need not continue the motion): at each seam, the gap between the new frame and the previous motion carried
+    /// one frame on is added to the new side and fades out over <paramref name="blendFrames"/> (inertialization), so
+    /// pose stays continuous and the new segment's own motion takes over. Bone offsets keep their lengths.
+    /// </summary>
+    public static void BlendSeams(List<XForm[]> frames, IEnumerable<int> seams, int blendFrames)
+    {
+        foreach (var s in seams)
+        {
+            if (s < 2 || s >= frames.Count || blendFrames < 1) continue;
+            XForm[] a = frames[s - 2], b = frames[s - 1], c = frames[s];
+            var bones = c.Length;
+            var offPos = new Vector3[bones];
+            var offRot = new Quaternion[bones];
+            for (var k = 0; k < bones; k++)
+            {
+                var pos = b[k].Pos + (b[k].Pos - a[k].Pos);
+                var rot = Quaternion.Normalize(Quaternion.Normalize(b[k].Rot * Quaternion.Inverse(a[k].Rot)) * b[k].Rot);
+                offPos[k] = pos - c[k].Pos;
+                var off = Quaternion.Normalize(rot * Quaternion.Inverse(c[k].Rot));
+                offRot[k] = off.W < 0 ? Quaternion.Negate(off) : off;
+            }
+            for (var t = 0; t < blendFrames && s + t < frames.Count; t++)
+            {
+                var w = 0.5f * (1f + MathF.Cos(MathF.PI * t / blendFrames));
+                var f = frames[s + t];
+                var o = new XForm[bones];
+                for (var k = 0; k < bones; k++)
+                    o[k] = new XForm(f[k].Pos + offPos[k] * w, Quaternion.Normalize(Quaternion.Slerp(Quaternion.Identity, offRot[k], w) * f[k].Rot));
+                frames[s + t] = o;
+            }
+        }
     }
 
     /// <summary>Gaussian smoothing of every bone's local transform over time (edges clamped; rotations averaged in one hemisphere).</summary>

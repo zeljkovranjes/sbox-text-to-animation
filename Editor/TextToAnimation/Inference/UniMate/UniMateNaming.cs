@@ -79,7 +79,7 @@ public static class UniMateNaming
 				string[] arm = { "Upper Arm", "Forearm", "Hand" };
 				for ( var k = 0; k < chain.Count; k++ ) result[chain[k]] = Prefix( result[chain[k]] ) + arm[Math.Min( k, arm.Length - 1 )];
 			}
-			else if ( chain.Count >= 3 )
+			else if ( chain.Count >= 2 )
 			{
 				string[] leg = { "Thigh", "Shin", "Foot", "Toe" };
 				for ( var k = 0; k < chain.Count; k++ ) result[chain[k]] = Prefix( result[chain[k]] ) + leg[Math.Min( k, leg.Length - 1 )];
@@ -184,6 +184,9 @@ public static class UniMateNaming
 		// a lone l/r token: "Bone_L.001", "ear_r"
 		m = Regex.Match( r, @"(?:^|[_.\s-])([LlRr])(?=[_.\s\d-]|$)" );
 		if ( m.Success ) return char.ToUpperInvariant( m.Groups[1].Value[0] ) == 'L' ? "Left" : "Right";
+		// a leg's corner code ("F_/B_ for quadrupeds"): front/back/rear/hind with a side, "Leg_FL1", "leg.RR.2", "LF_foot"
+		m = Regex.Match( r, @"(?:^|[_.\s-])(?:[FBRH]([LR])|([LR])[FBH])(?=[_.\s\d-]|$)" );
+		if ( m.Success ) return (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value) == "L" ? "Left" : "Right";
 		return null;
 	}
 

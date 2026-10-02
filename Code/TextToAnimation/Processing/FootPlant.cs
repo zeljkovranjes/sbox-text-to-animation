@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using TextToAnimation.Maths;
 using SkeletonModel = TextToAnimation.Rig.Skeleton;
@@ -161,6 +162,54 @@ public static class FootPlant
         ProcessFoot(frames, skeleton, left, ankleL, up, fps, report.GroundHeight, options, report.Left, fkScratch);
         ProcessFoot(frames, skeleton, right, ankleR, up, fps, report.GroundHeight, options, report.Right, fkScratch);
         return report;
+    }
+
+    /// <summary>
+    /// Locks the planted feet of any number of legs (a quadruped's four, a spider's eight) against one ground: each
+    /// foot touches it at its own rest height above the lowest resting foot (a digitigrade hind ankle sits higher
+    /// than a front paw), so a foot that never comes down to its contact height - a bird's tucked feet in flight -
+    /// is never planted. Returns one report per foot, in order.
+    /// </summary>
+    public static List<FootPlantFootReport> ApplyAll(
+        List<XForm[]> frames,
+        SkeletonModel skeleton,
+        IReadOnlyList<FootChain> feet,
+        Vector3 up,
+        float fps,
+        FootPlantOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(feet);
+        options ??= new FootPlantOptions();
+        var reports = feet.Select(_ => new FootPlantFootReport()).ToList();
+        int n = frames.Count;
+        if (n == 0 || feet.Count == 0 || up.LengthSquared() < 1e-12f || fps <= 0f)
+            return reports;
+        up = Vector3.Normalize(up);
+
+        var ankles = feet.Select(f => AnkleWorldPositions(frames, skeleton, f.Ankle)).ToArray();
+        var restHeights = feet.Select(f => Vector3.Dot(skeleton.RestWorld[f.Ankle].Pos, up)).ToArray();
+        var lowestRest = restHeights.Min();
+        var contact = restHeights.Select(h => h - lowestRest).ToArray();
+
+        // ground: the robust low of every foot's height less its contact height
+        var lows = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            var low = float.MaxValue;
+            for (int k = 0; k < feet.Count; k++)
+                low = MathF.Min(low, Vector3.Dot(ankles[k][i], up) - contact[k]);
+            lows[i] = low;
+        }
+        Array.Sort(lows);
+        // never above the rest pose's floor: a clip spent in the air (a bird flying) has no ground in it
+        var ground = MathF.Min(lows[(int)MathF.Floor(0.05f * (n - 1))], lowestRest + options.HeightThresholdCm);
+
+        var fkScratch = new XForm[skeleton.Count];
+        for (int k = 0; k < feet.Count; k++)
+            ProcessFoot(frames, skeleton, feet[k], ankles[k], up, fps, ground + contact[k], options, reports[k], fkScratch);
+        return reports;
     }
 
     /// <summary>

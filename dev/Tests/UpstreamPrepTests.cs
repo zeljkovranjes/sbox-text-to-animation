@@ -88,6 +88,7 @@ public class UpstreamPrepTests
 			RestWorldPos = raw.Select( b => V( b.GetProperty( "pos" ) ) ).ToList(),
 			SkinMax = raw.Select( b => b.GetProperty( "skin_max" ).GetDouble() ).ToList(),
 			SkinSum = raw.Select( b => b.GetProperty( "weight" ).GetDouble() ).ToList(),
+			GraftSkinnedRoots = false, // upstream exactly: it drops secondary roots even when they are skinned
 		};
 		var rot = raw.Select( b => Q( b.GetProperty( "rot" ) ) ).ToList();
 		var prep = UniMatePrep.Prepare( input );
@@ -187,6 +188,34 @@ public class UpstreamPrepTests
 		_out.WriteLine( $"{rig}: {raw.Count} bones -> {J} joints; face {prep.FaceSource}; {reordered} tie-reordered; T-pose max diff {worst:0.000000}; spectral eigen residual {specWorst:0.0000000}" );
 		Assert.True( worst < 1e-4f, $"T-pose differs from upstream by {worst}" );
 		Assert.True( specWorst < 1e-4, $"spectral features aren't upstream's eigenvectors (residual {specWorst})" );
+	}
+
+	/// <summary>
+	/// The port's extension: a spider whose legs hang off the armature object instead of its body is four separate
+	/// skinned roots besides the body; upstream keeps only the body and its fangs (4 joints, too few to animate). The
+	/// legs are grafted onto the body instead: one tree, every bone that deforms the mesh kept.
+	/// </summary>
+	[Fact]
+	public void SkinnedSecondaryRootsAreGraftedOntoTheBody()
+	{
+		var j = JsonDocument.Parse( File.ReadAllText( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep", "prep_spider.json" ) ) ).RootElement;
+		var raw = j.GetProperty( "raw" ).EnumerateArray().ToList();
+		var names = raw.Select( b => b.GetProperty( "name" ).GetString() ).ToList();
+		var prep = UniMatePrep.Prepare( new UniMatePrep.Input
+		{
+			ObjectType = "spider", Names = names,
+			Parents = raw.Select( b => b.GetProperty( "parent" ).GetInt32() ).ToList(),
+			RestWorldPos = raw.Select( b => { var a = b.GetProperty( "pos" ).EnumerateArray().Select( x => x.GetSingle() ).ToArray(); return new System.Numerics.Vector3( a[0], a[1], a[2] ); } ).ToList(),
+			SkinMax = raw.Select( b => b.GetProperty( "skin_max" ).GetDouble() ).ToList(),
+			SkinSum = raw.Select( b => b.GetProperty( "weight" ).GetDouble() ).ToList(),
+		} );
+		var skinned = raw.Where( b => b.GetProperty( "skin_max" ).GetDouble() > 0 ).Select( b => b.GetProperty( "name" ).GetString() ).ToHashSet();
+		Assert.Equal( 11, skinned.Count );
+		Assert.Subset( prep.RawNames.ToHashSet(), skinned );
+		Assert.Single( prep.Parents, p => p < 0 );
+		Assert.Equal( 4, prep.Grafts.Count );
+		foreach ( var leg in new[] { "Leg_FL1", "Leg_FR1", "Leg_RL1", "Leg_RR1" } )
+			Assert.Equal( "Body", names[prep.Grafts[names.IndexOf( leg )]] );
 	}
 
 	/// <summary>Rigs with sampling fixtures (T2A_RIGS=a,b restricts them, for iterating on one).</summary>

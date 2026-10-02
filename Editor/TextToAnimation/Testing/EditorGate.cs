@@ -773,22 +773,32 @@ public static class EditorGate
 			Note( $"{creature.Name}: GPU {Inference.Onnx.GpuAcceleration.Status ?? "in use"}" );
 			if ( made.Count > 0 && Inference.Onnx.GpuAcceleration.Status is null )
 			{
-				// the same first request on the CPU: the GPU must make the same motion on this rig too
-				Inference.Onnx.GpuAcceleration.Enabled = false;
-				var before = session.Workspace.Clips.ToList();
-				window.SetIntent( UI.EditIntent.New );
-				await window.RunEditPromptAsync( creature.Prompts[0] );
-				await EngineThread.SwitchToMainThread();
-				Inference.Onnx.GpuAcceleration.Enabled = true;
-				var cpu = session.Workspace.Clips.Except( before ).FirstOrDefault();
+				// the same first request on the GPU and on the CPU, as the model makes it (no clean-up: planted-foot
+				// detection is a threshold, so a hair's difference can lock a foot on one and not the other)
+				async Task<AnimClip> Raw( bool gpu )
+				{
+					Inference.Onnx.GpuAcceleration.Enabled = gpu;
+					window.EditPrompt.Options.CleanUp = false;
+					var before = session.Workspace.Clips.ToList();
+					window.SetIntent( UI.EditIntent.New );
+					await window.RunEditPromptAsync( creature.Prompts[0] );
+					await EngineThread.SwitchToMainThread();
+					window.EditPrompt.Options.CleanUp = true;
+					Inference.Onnx.GpuAcceleration.Enabled = true;
+					return session.Workspace.Clips.Except( before ).FirstOrDefault();
+				}
+				var onGpu = await Raw( true );
+				var cpu = await Raw( false );
 				var worst = 0f;
-				if ( cpu is not null && cpu.FrameCount == made[0].FrameCount )
+				var comparable = cpu is not null && onGpu is not null && cpu.FrameCount == onGpu.FrameCount;
+				if ( comparable )
 					for ( var f = 0; f < cpu.FrameCount; f++ )
 						for ( var b = 0; b < rig.Skeleton.Count; b++ )
-							worst = MathF.Max( worst, Maths.MathQ.AngleBetween( cpu.Frames[f][b].Rot, made[0].Frames[f][b].Rot ) * 180f / MathF.PI );
+							worst = MathF.Max( worst, Maths.MathQ.AngleBetween( cpu.Frames[f][b].Rot, onGpu.Frames[f][b].Rot ) * 180f / MathF.PI );
 				// the adaptive sampler may choose its steps a little differently on the two (float rounding): within a couple of degrees
-				check( $"{creature.Name}: the GPU makes the same motion as the CPU", cpu is not null && cpu.FrameCount == made[0].FrameCount && worst < 2f, $"{worst:0.000}° max" );
+				check( $"{creature.Name}: the GPU makes the same motion as the CPU", comparable && worst < 2f, $"{worst:0.000}° max" );
 				if ( cpu is not null ) session.Workspace.Clips.Remove( cpu );
+				if ( onGpu is not null ) session.Workspace.Clips.Remove( onGpu );
 			}
 			check( $"{creature.Name}: generates from text", made.Count == creature.Prompts.Length && made.All( c => c.FrameCount > 30 ), string.Join( ", ", made.Select( c => c.Name ) ) );
 			if ( made.Count == 0 ) return;
