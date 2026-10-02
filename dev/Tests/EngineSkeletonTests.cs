@@ -34,7 +34,20 @@ public class EngineSkeletonTests
             return new BoneDefinition(b.GetProperty("name").GetString()!, parent < 0 ? null : names[parent],
                 new XForm(new Vector3(p[0], p[1], p[2]), new Quaternion(r[0], r[1], r[2], r[3])));
         }).ToList();
-        return Skeleton.Create(defs);
+        var skeleton = Skeleton.Create(defs);
+        // newer dumps carry what the editor attached (skin weights, model name, constraint-driven bones)
+        var root = doc.RootElement;
+        if (root.TryGetProperty("objectType", out var type))
+        {
+            var skin = root.TryGetProperty("skin", out var sk) && sk.ValueKind == JsonValueKind.Object
+                ? sk.EnumerateObject().ToDictionary(p => p.Name, p => (p.Value[0].GetDouble(), p.Value[1].GetDouble()))
+                : null;
+            var driven = root.TryGetProperty("driven", out var dr) && dr.ValueKind == JsonValueKind.Array
+                ? dr.EnumerateArray().Select(d => d.GetString()!).ToHashSet()
+                : null;
+            TextToAnimation.Editor.Inference.UniMate.UniMateSkin.Attach(skeleton, skin, type.GetString(), driven);
+        }
+        return skeleton;
     }
 
     [Fact]

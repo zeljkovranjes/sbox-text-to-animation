@@ -1,0 +1,980 @@
+{
+  "bones": [
+    {
+      "name": "CROCODILE_",
+      "parent": -1,
+      "pos": [
+        -13.092031,
+        4.2351647E-22,
+        20.77624
+      ],
+      "rot": [
+        -2.7755559E-17,
+        0.7071066,
+        2.7755564E-17,
+        0.707107
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Pelvis",
+      "parent": 0,
+      "pos": [
+        1.7166138E-05,
+        -1.0460615E-05,
+        -1.9073486E-06
+      ],
+      "rot": [
+        -0.49999905,
+        -0.50000036,
+        -0.4999991,
+        0.5000015
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Spine",
+      "parent": 1,
+      "pos": [
+        13.420637,
+        0.96308136,
+        4.104233E-06
+      ],
+      "rot": [
+        -2.7715323E-06,
+        0.00039824567,
+        -7.506601E-10,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Spine1",
+      "parent": 2,
+      "pos": [
+        23.058603,
+        1.5258789E-05,
+        0.018391924
+      ],
+      "rot": [
+        -5.955421E-08,
+        4.217145E-08,
+        -1.264707E-07,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Tail",
+      "parent": 2,
+      "pos": [
+        -23.083057,
+        0.18545341,
+        -0.018411214
+      ],
+      "rot": [
+        -0.00039729604,
+        -3.821361E-05,
+        0.9960836,
+        0.08841551
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Neck",
+      "parent": 3,
+      "pos": [
+        23.058577,
+        -1.4268589,
+        0.018391933
+      ],
+      "rot": [
+        -5.9587826E-08,
+        8.4299245E-08,
+        -4.2186002E-08,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Tail1",
+      "parent": 4,
+      "pos": [
+        17.040033,
+        -0.013935089,
+        -3.8146973E-05
+      ],
+      "rot": [
+        -4.172325E-07,
+        -1.7136335E-07,
+        0.0137017295,
+        0.9999062
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_Clavicle",
+      "parent": 5,
+      "pos": [
+        -0.0029182434,
+        1.4452515,
+        3.594023
+      ],
+      "rot": [
+        0.642482,
+        -3.5464473E-07,
+        0.7663008,
+        -1.338427E-06
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_Clavicle",
+      "parent": 5,
+      "pos": [
+        0.002811432,
+        1.4452724,
+        -3.5940223
+      ],
+      "rot": [
+        0.6430932,
+        2.4150359E-07,
+        -0.76578796,
+        -1.6418344E-06
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Tail2",
+      "parent": 6,
+      "pos": [
+        17.499454,
+        -0.013959885,
+        -4.673004E-05
+      ],
+      "rot": [
+        -8.940697E-08,
+        -8.940697E-08,
+        0.00797398,
+        0.99996823
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_UpperArm",
+      "parent": 7,
+      "pos": [
+        7.8292522,
+        -1.7166138E-05,
+        -3.8146973E-06
+      ],
+      "rot": [
+        0.04491836,
+        0.14770891,
+        -0.046004295,
+        0.9869387
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_UpperArm",
+      "parent": 8,
+      "pos": [
+        7.829214,
+        -1.1444092E-05,
+        -1.1444092E-05
+      ],
+      "rot": [
+        -0.044919133,
+        -0.14770883,
+        -0.04600525,
+        0.9869387
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_Thigh",
+      "parent": 2,
+      "pos": [
+        -13.430185,
+        -0.96308136,
+        11.972249
+      ],
+      "rot": [
+        0.8786915,
+        0.06673056,
+        0.47270316,
+        -0.00047396478
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_Thigh",
+      "parent": 2,
+      "pos": [
+        -13.411075,
+        -0.96300125,
+        -11.993707
+      ],
+      "rot": [
+        0.8790683,
+        0.066731684,
+        -0.47200167,
+        0.00052528706
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Tail3",
+      "parent": 9,
+      "pos": [
+        17.53041,
+        -0.014080048,
+        -5.1498413E-05
+      ],
+      "rot": [
+        3.874302E-07,
+        1.1175871E-08,
+        0.0053640213,
+        0.99998564
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Neck1",
+      "parent": 5,
+      "pos": [
+        10.278946,
+        1.1444092E-05,
+        0.008208387
+      ],
+      "rot": [
+        -2.976029E-08,
+        6.325718E-08,
+        -1.05384984E-07,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_Forearm",
+      "parent": 10,
+      "pos": [
+        11.774778,
+        -1.9073486E-05,
+        -1.5258789E-05
+      ],
+      "rot": [
+        -5.9604645E-08,
+        -3.2782555E-07,
+        -0.6603873,
+        0.7509253
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_Forearm",
+      "parent": 11,
+      "pos": [
+        11.774748,
+        4.9591064E-05,
+        -4.196167E-05
+      ],
+      "rot": [
+        -6.7800283E-07,
+        -7.1525574E-07,
+        0.6603869,
+        -0.75092554
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_Calf",
+      "parent": 12,
+      "pos": [
+        12.3532295,
+        -2.0980835E-05,
+        -1.9073486E-06
+      ],
+      "rot": [
+        4.3213367E-07,
+        5.438924E-07,
+        -0.644964,
+        0.76421297
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_Calf",
+      "parent": 13,
+      "pos": [
+        12.353234,
+        2.2888184E-05,
+        -3.6239624E-05
+      ],
+      "rot": [
+        -1.4901161E-08,
+        3.5762787E-07,
+        -0.64496416,
+        0.7642128
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Tail4",
+      "parent": 14,
+      "pos": [
+        17.700157,
+        -0.013605118,
+        -4.9114227E-05
+      ],
+      "rot": [
+        -2.0861626E-07,
+        -1.0617077E-07,
+        0.0051382612,
+        0.9999869
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Head",
+      "parent": 15,
+      "pos": [
+        10.278923,
+        -2.1617508,
+        0.008201398
+      ],
+      "rot": [
+        -2.9777215E-08,
+        -0.00039714982,
+        -4.656613E-10,
+        0.99999994
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_Hand",
+      "parent": 16,
+      "pos": [
+        15.274715,
+        -1.5735626E-05,
+        7.6293945E-06
+      ],
+      "rot": [
+        -0.37373796,
+        -0.218253,
+        -0.5277993,
+        0.73083067
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_Hand",
+      "parent": 17,
+      "pos": [
+        15.274694,
+        -1.4305115E-06,
+        -1.5258789E-05
+      ],
+      "rot": [
+        0.3737384,
+        0.21825272,
+        -0.52779967,
+        0.73083025
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_Foot",
+      "parent": 18,
+      "pos": [
+        15.623073,
+        -5.722046E-06,
+        2.2888184E-05
+      ],
+      "rot": [
+        0.16885261,
+        -0.042397175,
+        -0.01811783,
+        0.9845624
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_Foot",
+      "parent": 19,
+      "pos": [
+        15.623049,
+        4.5776367E-05,
+        -4.196167E-05
+      ],
+      "rot": [
+        -0.16885242,
+        0.042396873,
+        -0.018117368,
+        0.9845624
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Tail5",
+      "parent": 20,
+      "pos": [
+        17.125854,
+        -0.012922287,
+        -5.5789948E-05
+      ],
+      "rot": [
+        2.0861626E-07,
+        -7.4505806E-08,
+        -0.008106764,
+        0.9999672
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Queue_de_cheval_1",
+      "parent": 21,
+      "pos": [
+        2.1572418,
+        7.25214,
+        1.4536388E-05
+      ],
+      "rot": [
+        -1.4846529E-06,
+        -1.7007542E-06,
+        0.012977185,
+        0.99991584
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_Finger0",
+      "parent": 22,
+      "pos": [
+        5.916874,
+        0.23017693,
+        0.5502567
+      ],
+      "rot": [
+        0.060996648,
+        -0.0016477557,
+        -0.18974753,
+        0.979935
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_Finger0",
+      "parent": 23,
+      "pos": [
+        5.916849,
+        0.23023605,
+        -0.5502453
+      ],
+      "rot": [
+        -0.060996637,
+        0.001647383,
+        -0.18974736,
+        0.97993505
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__L_Toe0",
+      "parent": 24,
+      "pos": [
+        3.7484612,
+        6.5637255,
+        -1.9073486E-06
+      ],
+      "rot": [
+        -2.6077032E-07,
+        -7.1525574E-07,
+        0.70710564,
+        0.707108
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__R_Toe0",
+      "parent": 25,
+      "pos": [
+        3.7484264,
+        6.5637674,
+        -1.5258789E-05
+      ],
+      "rot": [
+        -4.172325E-07,
+        -7.1525574E-07,
+        0.70710576,
+        0.7071078
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "CROCODILE__Tail6",
+      "parent": 26,
+      "pos": [
+        16.254692,
+        -0.0153160095,
+        -6.532669E-05
+      ],
+      "rot": [
+        1.1920929E-07,
+        5.9604645E-08,
+        -0.0039439723,
+        0.99999225
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    }
+  ],
+  "analysis": {
+    "IsHumanoid": false,
+    "limbs": [
+      "FrontLeg Left: CROCODILE__L_Clavicle,CROCODILE__L_UpperArm,CROCODILE__L_Forearm,CROCODILE__L_Hand,CROCODILE__L_Finger0",
+      "FrontLeg Right: CROCODILE__R_Clavicle,CROCODILE__R_UpperArm,CROCODILE__R_Forearm,CROCODILE__R_Hand,CROCODILE__R_Finger0",
+      "Leg Left: CROCODILE__L_Thigh,CROCODILE__L_Calf,CROCODILE__L_Foot,CROCODILE__L_Toe0",
+      "Leg Right: CROCODILE__R_Thigh,CROCODILE__R_Calf,CROCODILE__R_Foot,CROCODILE__R_Toe0"
+    ],
+    "tails": [],
+    "spine": "CROCODILE__Spine,CROCODILE__Spine1,CROCODILE__Neck,CROCODILE__Neck1,CROCODILE__Head,CROCODILE__Queue_de_cheval_1",
+    "bodyRoot": "CROCODILE__Pelvis"
+  },
+  "unimate": {
+    "skinKnown": true,
+    "joints": [
+      "CROCODILE__Pelvis = Hips",
+      "CROCODILE__Spine = Spine",
+      "CROCODILE__Spine1 = Spine",
+      "CROCODILE__Tail = Tail",
+      "CROCODILE__L_Thigh = Left Thigh",
+      "CROCODILE__R_Thigh = Right Thigh",
+      "CROCODILE__Neck = Neck",
+      "CROCODILE__Tail1 = Tail",
+      "CROCODILE__L_Calf = Left Shin",
+      "CROCODILE__R_Calf = Right Shin",
+      "CROCODILE__L_Clavicle = Left Shoulder",
+      "CROCODILE__R_Clavicle = Right Shoulder",
+      "CROCODILE__Neck1 = Neck",
+      "CROCODILE__Tail2 = Tail",
+      "CROCODILE__L_Foot = Left Foot",
+      "CROCODILE__R_Foot = Right Foot",
+      "CROCODILE__L_UpperArm = Left Upper Arm",
+      "CROCODILE__R_UpperArm = Right Upper Arm",
+      "CROCODILE__Head = Head",
+      "CROCODILE__Tail3 = Tail",
+      "CROCODILE__L_Toe0 = Left Toe",
+      "CROCODILE__R_Toe0 = Right Toe",
+      "CROCODILE__L_Forearm = Left Forearm",
+      "CROCODILE__R_Forearm = Right Forearm",
+      "CROCODILE__Queue_de_cheval_1 = Queue De Cheval",
+      "CROCODILE__Tail4 = Tail",
+      "CROCODILE__L_Hand = Left Hand",
+      "CROCODILE__R_Hand = Right Hand",
+      "CROCODILE__Tail5 = Tail",
+      "CROCODILE__L_Finger0 = Left Finger",
+      "CROCODILE__R_Finger0 = Right Finger",
+      "CROCODILE__Tail6 = Tail"
+    ],
+    "facing": "CROCODILE__R_Thigh / CROCODILE__L_Thigh",
+    "facingRule": "thigh",
+    "family": "Animal"
+  },
+  "objectType": "crocodile",
+  "skin": {
+    "CROCODILE_": [
+      0,
+      0
+    ],
+    "CROCODILE_ Pelvis": [
+      0.8672871589660645,
+      35.850894400166
+    ],
+    "CROCODILE__Pelvis": [
+      0.8672871589660645,
+      35.850894400166
+    ],
+    "CROCODILE_ Spine": [
+      0.9885414838790894,
+      48.17829376258305
+    ],
+    "CROCODILE__Spine": [
+      0.9885414838790894,
+      48.17829376258305
+    ],
+    "CROCODILE_ Spine1": [
+      0.9179754853248596,
+      50.500405011698604
+    ],
+    "CROCODILE__Spine1": [
+      0.9179754853248596,
+      50.500405011698604
+    ],
+    "CROCODILE_ Neck": [
+      0.7982957363128662,
+      39.156160007900326
+    ],
+    "CROCODILE__Neck": [
+      0.7982957363128662,
+      39.156160007900326
+    ],
+    "CROCODILE_ Neck1": [
+      0.8101635575294495,
+      32.37707457195211
+    ],
+    "CROCODILE__Neck1": [
+      0.8101635575294495,
+      32.37707457195211
+    ],
+    "CROCODILE_ Head": [
+      1,
+      524.1207252818713
+    ],
+    "CROCODILE__Head": [
+      1,
+      524.1207252818713
+    ],
+    "CROCODILE_ Queue de cheval 1": [
+      1,
+      493.65505673763255
+    ],
+    "CROCODILE__Queue_de_cheval_1": [
+      1,
+      493.65505673763255
+    ],
+    "CROCODILE_ L Clavicle": [
+      0.4029150903224945,
+      12.405351198358403
+    ],
+    "CROCODILE__L_Clavicle": [
+      0.4029150903224945,
+      12.405351198358403
+    ],
+    "CROCODILE_ L UpperArm": [
+      0.7838542461395264,
+      13.804166901369172
+    ],
+    "CROCODILE__L_UpperArm": [
+      0.7838542461395264,
+      13.804166901369172
+    ],
+    "CROCODILE_ L Forearm": [
+      0.9780898690223694,
+      35.59932129050139
+    ],
+    "CROCODILE__L_Forearm": [
+      0.9780898690223694,
+      35.59932129050139
+    ],
+    "CROCODILE_ L Hand": [
+      0.8484753370285034,
+      30.27804339118302
+    ],
+    "CROCODILE__L_Hand": [
+      0.8484753370285034,
+      30.27804339118302
+    ],
+    "CROCODILE_ L Finger0": [
+      1,
+      137.07723146677017
+    ],
+    "CROCODILE__L_Finger0": [
+      1,
+      137.07723146677017
+    ],
+    "CROCODILE_ R Clavicle": [
+      0.4029160737991333,
+      14.18388871208299
+    ],
+    "CROCODILE__R_Clavicle": [
+      0.4029160737991333,
+      14.18388871208299
+    ],
+    "CROCODILE_ R UpperArm": [
+      0.7838484644889832,
+      13.804210660156969
+    ],
+    "CROCODILE__R_UpperArm": [
+      0.7838484644889832,
+      13.804210660156969
+    ],
+    "CROCODILE_ R Forearm": [
+      0.9780898690223694,
+      35.64956738775072
+    ],
+    "CROCODILE__R_Forearm": [
+      0.9780898690223694,
+      35.64956738775072
+    ],
+    "CROCODILE_ R Hand": [
+      0.8484710454940796,
+      30.388745963806286
+    ],
+    "CROCODILE__R_Hand": [
+      0.8484710454940796,
+      30.388745963806286
+    ],
+    "CROCODILE_ R Finger0": [
+      0.9947534799575806,
+      133.93018660314556
+    ],
+    "CROCODILE__R_Finger0": [
+      0.9947534799575806,
+      133.93018660314556
+    ],
+    "CROCODILE_ L Thigh": [
+      0.9468669891357422,
+      22.00777062337147
+    ],
+    "CROCODILE__L_Thigh": [
+      0.9468669891357422,
+      22.00777062337147
+    ],
+    "CROCODILE_ L Calf": [
+      0.9669288992881775,
+      24.308918339687807
+    ],
+    "CROCODILE__L_Calf": [
+      0.9669288992881775,
+      24.308918339687807
+    ],
+    "CROCODILE_ L Foot": [
+      0.9222036004066467,
+      41.49667439528275
+    ],
+    "CROCODILE__L_Foot": [
+      0.9222036004066467,
+      41.49667439528275
+    ],
+    "CROCODILE_ L Toe0": [
+      0.990709662437439,
+      136.30267430907406
+    ],
+    "CROCODILE__L_Toe0": [
+      0.990709662437439,
+      136.30267430907406
+    ],
+    "CROCODILE_ R Thigh": [
+      0.9468679428100586,
+      22.0078524144119
+    ],
+    "CROCODILE__R_Thigh": [
+      0.9468679428100586,
+      22.0078524144119
+    ],
+    "CROCODILE_ R Calf": [
+      0.9669293761253357,
+      24.088121979002608
+    ],
+    "CROCODILE__R_Calf": [
+      0.9669293761253357,
+      24.088121979002608
+    ],
+    "CROCODILE_ R Foot": [
+      0.9222032427787781,
+      37.512609255391
+    ],
+    "CROCODILE__R_Foot": [
+      0.9222032427787781,
+      37.512609255391
+    ],
+    "CROCODILE_ R Toe0": [
+      1,
+      140.50744926348852
+    ],
+    "CROCODILE__R_Toe0": [
+      1,
+      140.50744926348852
+    ],
+    "CROCODILE_ Tail": [
+      0.8665271401405334,
+      60.37134925558348
+    ],
+    "CROCODILE__Tail": [
+      0.8665271401405334,
+      60.37134925558348
+    ],
+    "CROCODILE_ Tail1": [
+      0.756298303604126,
+      45.878095153238974
+    ],
+    "CROCODILE__Tail1": [
+      0.756298303604126,
+      45.878095153238974
+    ],
+    "CROCODILE_ Tail2": [
+      0.7571654319763184,
+      44.26811688413727
+    ],
+    "CROCODILE__Tail2": [
+      0.7571654319763184,
+      44.26811688413727
+    ],
+    "CROCODILE_ Tail3": [
+      0.7576208114624023,
+      44.908662158857624
+    ],
+    "CROCODILE__Tail3": [
+      0.7576208114624023,
+      44.908662158857624
+    ],
+    "CROCODILE_ Tail4": [
+      0.7549591064453125,
+      43.78137414254161
+    ],
+    "CROCODILE__Tail4": [
+      0.7549591064453125,
+      43.78137414254161
+    ],
+    "CROCODILE_ Tail5": [
+      0.720200777053833,
+      34.083413624801324
+    ],
+    "CROCODILE__Tail5": [
+      0.720200777053833,
+      34.083413624801324
+    ],
+    "CROCODILE_ Tail6": [
+      0.9735939502716064,
+      37.45631399228296
+    ],
+    "CROCODILE__Tail6": [
+      0.9735939502716064,
+      37.45631399228296
+    ]
+  },
+  "driven": []
+}

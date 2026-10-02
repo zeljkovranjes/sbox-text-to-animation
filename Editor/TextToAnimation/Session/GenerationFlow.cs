@@ -217,15 +217,6 @@ public sealed class GenerationFlow
 		return null;
 	}
 
-	/// <summary>A short clip name from a prompt ("Walk cautiously forward, look behind" -> "Walk cautiously forward").</summary>
-	public static string NameFromPrompt( string prompt )
-	{
-		var text = (prompt ?? "").Trim();
-		var cut = text.IndexOfAny( new[] { ',', '.', ';' } );
-		if ( cut > 0 ) text = text.Substring( 0, cut );
-		var words = text.Split( ' ', StringSplitOptions.RemoveEmptyEntries ).Take( 4 ).ToArray();
-		if ( words.Length == 0 ) return "Generated";
-		var name = string.Join( ' ', words );
-		return char.ToUpperInvariant( name[0] ) + name.Substring( 1 );
-	}
+	/// <summary>A clip name from a prompt (see <see cref="Inference.UniMate.UniMatePrompt.ClipName"/>).</summary>
+	public static string NameFromPrompt( string prompt ) => Inference.UniMate.UniMatePrompt.ClipName( prompt );
 }

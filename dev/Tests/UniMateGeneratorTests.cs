@@ -33,6 +33,16 @@ public class UniMatePromptTests
     [InlineData("a tired man slowly walk home", "An object slowly walks home.")]
     public void Captions(string input, string expected) => Assert.Equal(expected, UniMatePrompt.ToCaption(input));
 
+    [Theory]
+    [InlineData("A human does a front flip.", "Does a front flip")]
+    [InlineData("walk forward", "Walk forward")]
+    [InlineData("Walk cautiously forward, look behind, then run.", "Walk cautiously forward")]
+    [InlineData("a human punch forward", "Punches forward")]
+    [InlineData("An object flaps its wings and rises.", "Flaps its wings and rises")]
+    [InlineData("crouch down low and sneak slowly past the sleeping guard without making noise", "Crouch down low and sneak slowly past the")]
+    [InlineData("", "Generated")]
+    public void ClipNames(string prompt, string expected) => Assert.Equal(expected, UniMatePrompt.ClipName(prompt));
+
     [Fact]
     public void SplitsSequentialPrompts()
     {

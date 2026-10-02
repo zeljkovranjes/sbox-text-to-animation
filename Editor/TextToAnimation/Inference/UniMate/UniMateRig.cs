@@ -188,6 +188,22 @@ public sealed class UniMateRig
 			var names = prep.CleanNames;
 			int faceRight = prep.FaceRight, faceLeft = prep.FaceLeft;
 			var bodyAxis = prep.BodyAxis;
+			if ( alignVocabulary && !mixamoBody )
+			{
+				// UniMate's second naming stage (its language model's corrections)
+				var where = new Dictionary<int, UniMateNaming.Place>();
+				foreach ( var limb in rig.Analysis.Limbs )
+					for ( var k = 0; k < limb.Chain.Count; k++ )
+						where[limb.Chain[k]] = new UniMateNaming.Place( $"{limb.Kind}/{limb.Side}/{limb.Chain[0]}", k, limb.Chain.Count, false );
+				where[rig.Analysis.BodyRoot] = new UniMateNaming.Place( null, 0, 1, true );
+				var corrected = UniMateNaming.Correct( prep.RawNames, names, prep.Parents,
+					prep.Kept.Select( b => where.TryGetValue( b, out var w ) ? w : (UniMateNaming.Place?)null ).ToList(), objectType );
+				if ( !corrected.SequenceEqual( names ) )
+				{
+					names = corrected;
+					(faceRight, faceLeft, bodyAxis, _) = UniMateNames.ResolveFaceJoints( corrected, prep.RawNames );
+				}
+			}
 			if ( alignVocabulary )
 			{
 				var aligned = names.Select( UniMateVocabulary.Align ).Select( n => mixamoBody ? PeopleName( n ) : n ).ToArray();

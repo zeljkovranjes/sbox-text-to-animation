@@ -47,7 +47,8 @@ public sealed class ClipListPanel : TaCard
 		_canvas = new Widget( _scroll ) { Layout = Layout.Column() };
 		_canvas.SetStyles( "background-color: transparent;" );
 		_canvas.Layout.Spacing = 4;
-		_canvas.Layout.Margin = new Sandbox.UI.Margin( 0, 0, 8, 0 );
+		// equal on both sides: the scroll area keeps its own room for the scrollbar
+		_canvas.Layout.Margin = new Sandbox.UI.Margin( 0, 0, 0, 0 );
 		_scroll.Canvas = _canvas;
 
 		_session.Changed += c =>
@@ -112,7 +113,8 @@ public sealed class ClipListPanel : TaCard
 			MouseTracking = true;
 			Cursor = CursorShape.Finger;
 			Layout = Layout.Column();
-			Layout.Margin = new Sandbox.UI.Margin( 28, 5, 6, 5 );
+			// text clear of the origin icon on the left (6 + 18 + 4) and of the saved-state dot on the right (4 + 12 + 4)
+			Layout.Margin = new Sandbox.UI.Margin( 28, 5, 20, 5 );
 			Layout.Spacing = 1;
 			_name = Layout.Add( new TaElidedLabel( this, 9, 600 ) );
 			_details = Layout.Add( new TaElidedLabel( this, 8 ) { Color = Theme.TextLight } );
@@ -131,7 +133,7 @@ public sealed class ClipListPanel : TaCard
 				_ => "New",
 			};
 			_details.Text = $"{_clip.Duration:0.0#} s  ·  {_clip.Fps:0} fps  ·  {origin}{(_clip.Looping ? "  ·  Loop" : "")}";
-			ToolTip = _clip.SavedUtc is null ? "Not saved into the model yet" : $"Saved into the model as \"{_clip.EffectiveSequenceName}\"";
+			ToolTip = _clip.Name + "\n" + (_clip.SavedUtc is null ? "Not saved into the model yet" : $"Saved into the model as \"{_clip.EffectiveSequenceName}\"");
 		}
 
 		bool Active => _panel._session.ActiveClip == _clip;

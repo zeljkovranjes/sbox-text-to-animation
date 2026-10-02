@@ -73,12 +73,17 @@ public class AnyArmatureTests
         Assert.All(u.Bone, b => Assert.InRange(b, 0, s.Count - 1));
         Assert.Equal(u.Count, u.Bone.Distinct().Count());
         Assert.All(u.Skeleton.CleanNames, n => Assert.False(string.IsNullOrWhiteSpace(n)));
-        // upstream's rule names, aligned to UniMate's training vocabulary
+        // upstream's rule names, then its second naming stage: every label is the rule's or one UniMate trained on
         for (var j = 0; j < u.Count; j++)
-            Assert.Equal(UniMateVocabulary.Align(UniMateNames.Clean(s[u.Bone[j]].Name, "")), u.Skeleton.CleanNames[j]);
-        // the facing joints are exactly the ones upstream's rule picks from those names
+        {
+            var rule = UniMateVocabulary.Align(UniMateNames.Clean(s[u.Bone[j]].Name, ""));
+            var name = u.Skeleton.CleanNames[j];
+            Assert.True(name == rule || UniMateVocabulary.Names.Contains(name), $"{s[u.Bone[j]].Name}: \"{name}\" (rule \"{rule}\")");
+        }
+        // the facing joints are the ones upstream's facing rule picks from those names
         var kept = u.Prep.Kept;
-        var (r, l, bodyAxis, _) = UniMateNames.ResolveFaceJoints(u.Prep.CleanNames.Select(UniMateVocabulary.Align).ToArray(), u.Prep.RawNames);
+        var final = Enumerable.Range(0, u.Count).ToDictionary(j => u.Bone[j], j => u.Skeleton.CleanNames[j]);
+        var (r, l, bodyAxis, _) = UniMateNames.ResolveFaceJoints(kept.Select(b => final[b]).ToArray(), u.Prep.RawNames);
         Assert.Equal(r < 0 ? -1 : kept[r], u.Skeleton.RightHip < 0 ? -1 : u.Bone[u.Skeleton.RightHip]);
         Assert.Equal(l < 0 ? -1 : kept[l], u.Skeleton.LeftHip < 0 ? -1 : u.Bone[u.Skeleton.LeftHip]);
         Assert.Equal(bodyAxis, u.Skeleton.BodyAxis);

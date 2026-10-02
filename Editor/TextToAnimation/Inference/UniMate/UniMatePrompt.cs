@@ -96,6 +96,34 @@ public static class UniMatePrompt
 		return w.Length >= 3 && w.EndsWith( 's' ) && !w.EndsWith( "ss" ) && !w.EndsWith( "us" ) && !w.EndsWith( "is" ) && !w.EndsWith( "'s" );
 	}
 
+	/// <summary>
+	/// A clip name from a prompt: its first step, whole, without the subject ("A human does a front flip." -> "Does a
+	/// front flip", "walk cautiously forward, look behind" -> "Walk cautiously forward"). Only a very long step is
+	/// shortened, at a word boundary.
+	/// </summary>
+	public static string ClipName( string prompt )
+	{
+		var step = SplitSteps( prompt ).FirstOrDefault() ?? "";
+		var text = step.Trim().TrimEnd( '.', '!', '?' );
+		if ( HasSubject( text ) )
+		{
+			var caption = ToCaption( text ).TrimEnd( '.' );
+			if ( caption.StartsWith( "An object ", StringComparison.Ordinal ) ) text = caption["An object ".Length..];
+		}
+		const int MaxLength = 48;
+		if ( text.Length > MaxLength )
+		{
+			var space = text.LastIndexOf( ' ', MaxLength );
+			text = text[..(space > 0 ? space : MaxLength)];
+		}
+		text = text.Trim();
+		if ( text.Length == 0 ) return "Generated";
+		return char.ToUpperInvariant( text[0] ) + text[1..];
+	}
+
+	/// <summary>Whether the step names its subject ("a human punches" - not "punch").</summary>
+	public static bool HasSubject( string step ) => StartsWithSubject( (step ?? "").Trim() );
+
 	static bool StartsWithSubject( string s )
 	{
 		var first = s.Split( ' ', StringSplitOptions.RemoveEmptyEntries ).FirstOrDefault() ?? "";

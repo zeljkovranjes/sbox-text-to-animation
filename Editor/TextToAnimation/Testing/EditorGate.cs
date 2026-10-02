@@ -652,7 +652,7 @@ public static class EditorGate
 		if ( Environment.GetEnvironmentVariable( "T2A_GATE_ONLY_EXTRA" ) == "1" ) list.Clear();
 		if ( !string.IsNullOrEmpty( extra ) && Directory.Exists( extra ) )
 			list.AddRange( Directory.GetFiles( extra, "*.fbx" ).Select( f => new Creature( Path.GetFileNameWithoutExtension( f ), new[] { "walk forward", "turn around" }, -1f, f ) ) );
-		foreach ( var creature in list )
+		foreach ( var creature in list.ToArray() )
 		{
 			try { await RunCreatureAsync( window, shots, check, creature, source, session, report ); }
 			catch ( Exception e )
@@ -936,6 +936,10 @@ public static class EditorGate
 					bodyRoot = s[a.BodyRoot].Name,
 				},
 				unimate = UniMateDump( rig ),
+				// what the editor attached from the model's sources: offline tests prepare the rig exactly as the editor does
+				objectType = Inference.UniMate.UniMateSkin.ObjectTypeOf( s ),
+				skin = Inference.UniMate.UniMateSkin.WeightsOf( s )?.ToDictionary( kv => kv.Key, kv => new[] { kv.Value.Max, kv.Value.Sum } ),
+				driven = Inference.UniMate.UniMateSkin.DrivenOf( s )?.ToList(),
 			};
 			File.WriteAllText( path, JsonSerializer.Serialize( dump, new JsonSerializerOptions { WriteIndented = true } ) );
 		}
