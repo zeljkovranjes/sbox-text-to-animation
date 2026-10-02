@@ -675,10 +675,13 @@ public sealed class TextToAnimationWindow : Widget
 	void Frame()
 	{
 		if ( !this.IsValid() ) return;
+		FrameProbe.FrameTick();
+		var started = FrameProbe.Now;
 		Session.Tick( RealTime.Delta ); // playback (the views only draw it; there can be more than one)
 		_indicator?.Tick();
 		if ( _firstLoad?.Visible == true ) _firstLoad.Tick();
 		if ( Session.Playing ) RefreshTransport();
+		FrameProbe.Add( "window frame", FrameProbe.Now - started );
 	}
 
 	void OnSessionChanged( SessionChange change )

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using Editor;
 using Sandbox;
 using TextToAnimation.Editor.Inference.Onnx;
 
@@ -82,26 +83,97 @@ public sealed class GpuProgram : IGpuProgram
 		}
 	}
 
-	public Dictionary<string, float[]> Run( IReadOnlyDictionary<string, Tensor> feed ) => OnMain( () =>
+	/// <summary>
+	/// Runs the plan. From the main thread it runs at once; from a worker (generation) it is done in slices of at
+	/// most <see cref="SliceMs"/> per editor frame while the worker waits, so the editor keeps drawing during
+	/// generation instead of stalling for a whole network call.
+	/// </summary>
+	public Dictionary<string, float[]> Run( IReadOnlyDictionary<string, Tensor> feed )
 	{
 		ObjectDisposedException.ThrowIf( _disposed, this );
-		foreach ( var (name, (buffer, _)) in _plan.Inputs )
-			_buffers[buffer].SetData( feed[name].F.AsSpan() );
-		for ( var i = 0; i < _launches.Count; i++ )
+		var job = new Job( this, feed );
+		if ( ThreadSafe.IsMainThread )
 		{
-			if ( _flushBefore[i] ) Graphics.FlushGPU();
-			var (shader, attributes, x, y, _) = _launches[i];
-			shader.DispatchWithAttributes( attributes, x, y, 1 );
+			while ( !job.Advance( double.MaxValue ) ) { }
+			return job.Result;
 		}
-		var result = new Dictionary<string, float[]>( StringComparer.Ordinal );
-		foreach ( var (name, (buffer, shape)) in _plan.Outputs )
+		lock ( Pending ) Pending.Enqueue( job );
+		job.Done.Wait();
+		job.Done.Dispose();
+		if ( job.Error is not null ) throw new InvalidOperationException( job.Error.Message, job.Error );
+		return job.Result;
+	}
+
+	/// <summary>Main-thread time given to GPU work per editor frame.</summary>
+	public static double SliceMs { get; set; } = double.TryParse( Environment.GetEnvironmentVariable( "T2A_GPU_SLICE_MS" ), out var ms ) ? ms : 10;
+
+	static readonly Queue<Job> Pending = new();
+
+	[EditorEvent.Frame]
+	static void Pump()
+	{
+		var deadline = Job.Now + SliceMs;
+		while ( Job.Now < deadline )
 		{
-			var data = new float[shape.Aggregate( 1, ( a, d ) => a * d )];
-			_buffers[buffer].GetData( data.AsSpan() );
-			result[name] = data;
+			Job job;
+			lock ( Pending ) if ( !Pending.TryPeek( out job ) ) return;
+			bool finished;
+			try { finished = job._program._disposed ? throw new ObjectDisposedException( nameof( GpuProgram ) ) : job.Advance( deadline ); }
+			catch ( Exception e ) { job.Error = e; finished = true; }
+			if ( !finished ) return;
+			lock ( Pending ) Pending.Dequeue();
+			job.Done.Set();
 		}
-		return result;
-	} );
+	}
+
+	/// <summary>One run in progress: inputs uploaded, launches dispatched up to <see cref="_next"/>, then read back.</summary>
+	sealed class Job
+	{
+		static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
+		public static double Now => Clock.Elapsed.TotalMilliseconds;
+
+		public readonly GpuProgram _program;
+		readonly IReadOnlyDictionary<string, Tensor> _feed;
+		int _next = -1;
+		public Dictionary<string, float[]> Result;
+		public Exception Error;
+		public readonly ManualResetEventSlim Done = new();
+
+		public Job( GpuProgram program, IReadOnlyDictionary<string, Tensor> feed ) { _program = program; _feed = feed; }
+
+		/// <summary>Does work until <paramref name="deadline"/> (at least one step); true when the result is ready.</summary>
+		public bool Advance( double deadline )
+		{
+			var p = _program;
+			if ( _next < 0 )
+			{
+				foreach ( var (name, (buffer, _)) in p._plan.Inputs )
+					p._buffers[buffer].SetData( _feed[name].F.AsSpan() );
+				_next = 0;
+			}
+			do
+			{
+				if ( _next == p._launches.Count )
+				{
+					var result = new Dictionary<string, float[]>( StringComparer.Ordinal );
+					foreach ( var (name, (buffer, shape)) in p._plan.Outputs )
+					{
+						var data = new float[shape.Aggregate( 1, ( a, d ) => a * d )];
+						p._buffers[buffer].GetData( data.AsSpan() );
+						result[name] = data;
+					}
+					Result = result;
+					return true;
+				}
+				if ( p._flushBefore[_next] ) Graphics.FlushGPU();
+				var (shader, attributes, x, y, _) = p._launches[_next];
+				shader.DispatchWithAttributes( attributes, x, y, 1 );
+				_next++;
+			}
+			while ( Now < deadline );
+			return false;
+		}
+	}
 
 	public string Diagnose( IReadOnlyDictionary<string, Tensor> feed, IReadOnlyDictionary<string, float[]> cpu ) => OnMain( () =>
 	{

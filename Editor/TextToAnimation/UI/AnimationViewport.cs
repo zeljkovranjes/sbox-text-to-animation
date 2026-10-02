@@ -177,6 +177,13 @@ public sealed class AnimationViewport : SceneRenderingWidget
 
 	protected override void PreFrame()
 	{
+		var started = FrameProbe.Now;
+		try { ViewFrame(); }
+		finally { FrameProbe.Add( "viewport", FrameProbe.Now - started ); }
+	}
+
+	void ViewFrame()
+	{
 		Scene.EditorTick( RealTime.Now, RealTime.Delta );
 		GizmoInstance.Input.IsHovered = IsActiveWindow && IsUnderMouse;
 		UpdateGizmoInputs( GizmoInstance.Input.IsHovered );
@@ -393,14 +400,24 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	{
 		base.OnMousePress( e );
 		_lastMouse = e.LocalPosition;
+		// left-drag on empty space looks around (on a bone or a gizmo handle it picks or poses instead)
+		_orbiting = e.LeftMouseButton && !Gizmo.HasHovered;
 	}
+
+	protected override void OnMouseReleased( MouseEvent e )
+	{
+		base.OnMouseReleased( e );
+		if ( e.LeftMouseButton ) _orbiting = false;
+	}
+
+	bool _orbiting;
 
 	protected override void OnMouseMove( MouseEvent e )
 	{
 		base.OnMouseMove( e );
 		var delta = e.LocalPosition - _lastMouse;
 		_lastMouse = e.LocalPosition;
-		if ( (e.ButtonState & MouseButtons.Right) != 0 )
+		if ( (e.ButtonState & MouseButtons.Right) != 0 || (_orbiting && (e.ButtonState & MouseButtons.Left) != 0) )
 		{
 			_yaw -= delta.x * 0.4f;
 			_pitch = Math.Clamp( _pitch + delta.y * 0.3f, -15f, 85f );

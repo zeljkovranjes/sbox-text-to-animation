@@ -207,6 +207,7 @@ public static class EditorGate
 			Check( "viewport renders", true );
 		}
 		catch ( Exception e ) { Check( "viewport renders", false, e.Message ); }
+		Note( "imported clip, playing: " + await Measure( session, true ) );
 
 		// ---- 6. generate from the editor's prompt: type a prompt and press Enter
 		GeneratorService.Instance.Refresh();
@@ -222,12 +223,15 @@ public static class EditorGate
 			composer.Text = "walk forward";
 			var beforeGenerate = session.Workspace.Clips.ToList();
 			composer.Input.Focus();
+			UI.FrameProbe.Reset();
+			var generationStarted = Clock.Elapsed.TotalSeconds;
 			composer.Input.PostKeyEvent( KeyCode.Enter );
 			var enterStarted = await WaitUntil( () => window.Flow.Running, 10 );
 			Check( "Enter in the prompt starts generating", enterStarted );
 			if ( !enterStarted ) composer.Submit();
 			await EngineThread.DelayOnMain( 500 );
 			await WaitUntil( () => !window.Flow.Running && !session.Busy, 600 );
+			Note( $"while generating ({Clock.Elapsed.TotalSeconds - generationStarted:0.0} s): " + UI.FrameProbe.Report() );
 			await EngineThread.DelayOnMain( 300 );
 			generated = session.Workspace.Clips.Except( beforeGenerate ).FirstOrDefault();
 			Check( "UniMate generates", generated?.Origin == ClipOrigin.Generated, generated?.Name ?? "" );
@@ -256,6 +260,8 @@ public static class EditorGate
 				Check( "generated walk travels forward", System.Numerics.Vector3.Dot( travel, session.Rig.Forward ) > session.Rig.Cm( 30f ), travel.ToString() );
 				await EngineThread.DelayOnMain( 400 );
 				File.WriteAllBytes( Path.Combine( shots, "viewport_generated.png" ), window.Viewport.RenderToPng() );
+				Note( "after generating, idle: " + await Measure( session, false ) );
+				Note( "after generating, playing: " + await Measure( session, true ) );
 			}
 		}
 		else Note( $"UniMate not installed ({GeneratorService.Instance.State}) - generation skipped" );
@@ -951,5 +957,15 @@ public static class EditorGate
 				worst = MathF.Max( worst, Maths.MathQ.AngleBetween( frames[0][b].Rot, frames[frames.Count / 2][b].Rot ) );
 			return worst * 180f / MathF.PI;
 		}
+	}
+
+	/// <summary>The editor's frame times over three seconds (playing or not).</summary>
+	static async Task<string> Measure( EditorSession session, bool play )
+	{
+		session.Playing = play;
+		UI.FrameProbe.Reset();
+		await EngineThread.DelayOnMain( 3000 );
+		session.Playing = false;
+		return UI.FrameProbe.Report();
 	}
 }

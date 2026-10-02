@@ -548,7 +548,7 @@ public sealed class EditorSession
 		try
 		{
 			var dirty = Workspace.Clips.Where( c => _dirtyClips.Contains( c.Id ) ).ToList();
-			Store.Save( Workspace, Rig.Skeleton, dirty );
+			UI.FrameProbe.Time( "workspace save", () => Store.Save( Workspace, Rig.Skeleton, dirty ) );
 			_dirtyClips.Clear();
 		}
 		catch ( Exception e )

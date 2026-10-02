@@ -9,6 +9,15 @@ namespace TextToAnimation.Editor.UI;
 /// </summary>
 public sealed class HelpPopup : PopupWidget
 {
+	/// <summary>Mouse gestures in the 3D preview.</summary>
+	public static readonly (string Action, string How)[] Preview =
+	{
+		("Look around", "Drag empty space, or right-drag anywhere"),
+		("Pan / zoom", "Middle-drag pans, the wheel zooms"),
+		("Reframe the character", "Double-click empty space"),
+		("Pick a bone", "Click its dot"),
+	};
+
 	/// <summary>Mouse gestures on the timeline.</summary>
 	public static readonly (string Action, string How)[] Timeline =
 	{
@@ -45,6 +54,7 @@ public sealed class HelpPopup : PopupWidget
 		Layout = Layout.Column();
 		Layout.Margin = 12;
 		Layout.Spacing = 4;
+		Section( "Preview", Preview );
 		Section( "Timeline", Timeline );
 		Layout.AddSpacingCell( 8 );
 		Section( "Keyboard", Keys );

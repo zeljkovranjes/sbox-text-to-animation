@@ -64,6 +64,13 @@ public sealed class TimelineWidget : Widget
 
 	protected override void OnPaint()
 	{
+		var started = FrameProbe.Now;
+		try { PaintTimeline(); }
+		finally { FrameProbe.Add( "timeline paint", FrameProbe.Now - started ); }
+	}
+
+	void PaintTimeline()
+	{
 		Paint.Antialiasing = true;
 		Paint.ClearPen();
 		Paint.SetBrush( Theme.WindowBackground );
