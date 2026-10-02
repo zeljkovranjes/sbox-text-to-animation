@@ -47,6 +47,9 @@ public static class UniMateNaming
 			else if ( side is null )
 				label = StripSideWords( label );
 
+			// rule 5 (quadruped markers between side and part): a raw Mid is Middle, a raw Rear on a leg is Hind
+			label = LegMarker( raw[i], label );
+
 			// rule 7: chain tips ("Bip01_Xtra03Nub", "Ponytail2Nub") are "<part> End"
 			if ( Trailing.IsMatch( raw[i] ) && !label.EndsWith( " End", StringComparison.Ordinal ) && !label.EndsWith( "End", StringComparison.Ordinal ) )
 				label += " End";
@@ -94,10 +97,13 @@ public static class UniMateNaming
 	{
 		var side = SideOf( label );
 		var words = (side is null ? label : label[(side.Length + 1)..]).Split( ' ' ).ToList();
-		while ( words.Count > 1 && Containers.Contains( words[0] ) && words[1] != "End" && UniMateVocabulary.Names.Contains( words[1] ) )
+		while ( words.Count > 1 && Containers.Contains( words[0] ) && words[1] != "End" && Known( string.Join( ' ', words.Skip( 1 ) ) ) )
 			words.RemoveAt( 0 );
 		return (side is null ? "" : side + " ") + string.Join( ' ', words );
 	}
+
+	/// <summary>A part UniMate's vocabulary has, bare or with a side ("Claw" is there as "Left Claw").</summary>
+	static bool Known( string part ) => UniMateVocabulary.Names.Contains( part ) || UniMateVocabulary.Names.Contains( "Left " + part );
 
 	static readonly HashSet<string> Qualifiers = new( StringComparer.Ordinal ) { "Left", "Right", "Front", "Back", "Middle", "Rear", "Hind", "Inner", "Outer", "Upper", "Lower" };
 
@@ -134,6 +140,28 @@ public static class UniMateNaming
 				return sided;
 			}
 		return label;
+	}
+
+	static readonly HashSet<string> LegParts = new( StringComparer.Ordinal ) { "Thigh", "Shin", "Foot", "Leg", "Toe", "Knee", "Ankle" };
+
+	/// <summary>"Bip01_R_Thigh_Mid" -> "Right Middle Thigh", "Bip01_L_Calf_Rear" -> "Left Hind Shin".</summary>
+	static string LegMarker( string raw, string label )
+	{
+		var tokens = System.Text.RegularExpressions.Regex.Split( raw ?? "", @"[^A-Za-z]+|(?<=[a-z])(?=[A-Z])" ).Where( t => t.Length > 0 ).Select( t => t.ToLowerInvariant() ).ToHashSet();
+		var side = SideOf( label );
+		var words = (side is null ? label : label[(side.Length + 1)..]).Split( ' ' ).ToList();
+		var end = words.Count > 1 && words[^1] == "End";
+		var part = end ? words[^2] : words.LastOrDefault();
+		if ( part is null || !LegParts.Contains( part ) ) return label;
+		// a rule-stage Rear on a leg is the vocabulary's Hind ("Hind Thigh"; Rear stays for hooves)
+		var rear = words.IndexOf( "Rear" );
+		if ( rear >= 0 ) words[rear] = "Hind";
+		else if ( !words.Any( Qualifiers.Contains ) )
+		{
+			string marker = tokens.Contains( "mid" ) || tokens.Contains( "middle" ) ? "Middle" : tokens.Contains( "rear" ) || tokens.Contains( "hind" ) ? "Hind" : null;
+			if ( marker is not null ) words.Insert( 0, marker );
+		}
+		return (side is null ? "" : side + " ") + string.Join( ' ', words );
 	}
 
 	static bool IsNumeric( string raw ) => Regex.IsMatch( raw ?? "", @"^_?\d+_?$" );

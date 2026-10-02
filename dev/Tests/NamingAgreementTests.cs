@@ -94,8 +94,8 @@ public class NamingAgreementTests
             _out.WriteLine($"{ds}: {n} skeletons, joint names agree {100.0 * same / total:0.0}% ({same}/{total}), facing agrees on {faces}/{n}, {errors} failed; {left} joints of people left to the engine by design");
             foreach (var (k, rate, diffs) in worst.OrderBy(w => w.Item2).Take(6))
                 _out.WriteLine($"   {k}: {rate * 100:0}%  e.g. {string.Join("; ", diffs.Take(4))}");
-            // measured 2026-10-02: 95.4% / 90.1%, facing 64 / 184 (rule stage alone: 91.1% / 87.0%, facing 65 / 178)
-            var (minNames, minFaces) = ds == "truebones" ? (0.954, 64) : (0.90, 184);
+            // measured 2026-10-02: 95.9% / 90.1%, facing 65 / 184 (rule stage alone: 91.1% / 87.0%, facing 65 / 178)
+            var (minNames, minFaces) = ds == "truebones" ? (0.958, 65) : (0.901, 184);
             Assert.True((double)same / total >= minNames, $"{ds}: names agree on only {100.0 * same / total:0.0}%");
             Assert.True(faces >= minFaces, $"{ds}: facing agrees on only {faces}/{n}");
         }
