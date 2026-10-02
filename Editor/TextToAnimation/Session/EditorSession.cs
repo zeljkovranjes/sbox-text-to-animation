@@ -58,7 +58,8 @@ public sealed class EditorSession
 			if ( ActiveClip is null ) return null;
 			if ( _framesCache is null || _framesRevision != ActiveClip.Revision || _framesClip != ActiveClip.Id )
 			{
-				_framesCache = ActiveClip.EvaluateFrames( Rig.Skeleton );
+				var clip = ActiveClip;
+				UI.FrameProbe.Time( "evaluate frames", () => _framesCache = clip.EvaluateFrames( Rig.Skeleton ) );
 				_framesRevision = ActiveClip.Revision;
 				_framesClip = ActiveClip.Id;
 			}
@@ -101,7 +102,11 @@ public sealed class EditorSession
 		return stack;
 	}
 
-	public void Notify( SessionChange change ) => Changed?.Invoke( change );
+	public void Notify( SessionChange change )
+	{
+		if ( UI.FrameProbe.Enabled ) UI.FrameProbe.Time( "change " + change, () => Changed?.Invoke( change ) );
+		else Changed?.Invoke( change );
+	}
 	public void SetStatus( string text, UI.Tone tone = UI.Tone.Neutral ) => Status?.Invoke( text, tone );
 
 	public void SetBusy( bool busy, string text = "" )
@@ -217,6 +222,7 @@ public sealed class EditorSession
 		ActiveClip = ws.ActiveClipId is { } active ? ws.Find( active ) : ws.Clips.FirstOrDefault();
 		store.Save( ws, skeleton, Array.Empty<AnimClip>() ); // registers the workspace in the index
 		PromptHistory = store.LoadPromptHistory( ws.Id ) ?? SeedHistory( ws );
+		WorkspaceStore.Warmup();
 		Notify( SessionChange.Model | SessionChange.ClipList | SessionChange.ActiveClip | SessionChange.ClipData | SessionChange.Selection | SessionChange.Undo );
 		return null;
 	}
@@ -549,6 +555,7 @@ public sealed class EditorSession
 		{
 			var dirty = Workspace.Clips.Where( c => _dirtyClips.Contains( c.Id ) ).ToList();
 			UI.FrameProbe.Time( "workspace save", () => Store.Save( Workspace, Rig.Skeleton, dirty ) );
+			if ( UI.FrameProbe.Enabled ) Log.Info( $"[t2a-gate] workspace save: {WorkspaceStore.LastSaveTimings}" );
 			_dirtyClips.Clear();
 		}
 		catch ( Exception e )

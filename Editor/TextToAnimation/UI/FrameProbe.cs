@@ -13,6 +13,9 @@ public static class FrameProbe
 {
 	static bool _enabled;
 
+	/// <summary>True once the gate turned the probe on.</summary>
+	public static bool Enabled => _enabled;
+
 	static readonly Dictionary<string, List<double>> _samples = new();
 	static readonly Stopwatch _clock = Stopwatch.StartNew();
 	static double _lastFrame = -1;

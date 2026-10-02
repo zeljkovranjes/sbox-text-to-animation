@@ -147,9 +147,14 @@ public sealed class WorkspaceStore
         ws.ModifiedUtc = DateTime.UtcNow;
         ws.ModelPath = AnimationWorkspace.NormalizePath(ws.ModelPath);
         Directory.CreateDirectory(Path.Combine(Dir(ws.Id), "clips"));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        double Lap() { var ms = watch.Elapsed.TotalMilliseconds; watch.Restart(); return ms; }
         var toWrite = changedClips?.ToList() ?? ws.Clips;
-        foreach (var clip in toWrite)
-            AtomicWrite(ClipPath(ws.Id, clip.Id), SerializeFrames(clip, skeleton));
+        var frames = toWrite.Select(clip => (clip, bytes: SerializeFrames(clip, skeleton))).ToList();
+        var serialize = Lap();
+        foreach (var (clip, bytes) in frames)
+            AtomicWrite(ClipPath(ws.Id, clip.Id), bytes);
+        var write = Lap();
 
         var dto = new WorkspaceDto
         {
@@ -164,10 +169,15 @@ public sealed class WorkspaceStore
         foreach (var file in Directory.GetFiles(Path.Combine(Dir(ws.Id), "clips"), "*.t2aclip"))
             if (!live.Contains(Path.GetFileName(file))) File.Delete(file);
 
+        var manifest = Lap();
         var index = ReadIndex();
         index.Models[ws.ModelPath] = ws.Id;
         WriteIndex(index);
+        LastSaveTimings = $"frames {serialize:0.0} ms, clip files {write:0.0}, manifest {manifest:0.0}, index {Lap():0.0}";
     }
+
+    /// <summary>Where the last save's time went (for the editor's frame probe).</summary>
+    public static string LastSaveTimings { get; private set; } = "";
 
     /// <summary>Loads a workspace; clip frames are remapped by bone name onto <paramref name="skeleton"/>.</summary>
     public AnimationWorkspace Load(Guid id, Rig.Skeleton skeleton, List<string> warnings)
@@ -206,6 +216,18 @@ public sealed class WorkspaceStore
         var index = ReadIndex();
         foreach (var key in index.Models.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList()) index.Models.Remove(key);
         WriteIndex(index);
+    }
+
+    /// <summary>
+    /// Serializes a throwaway workspace with a generated clip, in memory: the JSON serializer builds its metadata for
+    /// these types the first time (tens of ms, ~170 in the editor) - done while a model opens instead of in the save
+    /// right after the first generation, where it showed as a hitch when the result appeared.
+    /// </summary>
+    public static void Warmup()
+    {
+        var clip = new AnimClip { Name = "warmup", Origin = ClipOrigin.Generated, Generation = new GenerationRecord { Mode = "TextToMotion", Prompts = new() { "warmup" } } };
+        JsonSerializer.Serialize(new WorkspaceDto { Clips = new() { ToDto(clip) } }, Json);
+        JsonSerializer.SerializeToUtf8Bytes(new List<PromptHistoryEntry> { new() { Prompt = "warmup", ClipIds = new() { Guid.Empty } } }, Json);
     }
 
     static ClipDto ToDto(AnimClip c) => new()

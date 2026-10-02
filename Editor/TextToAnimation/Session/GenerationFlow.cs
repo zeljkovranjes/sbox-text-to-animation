@@ -110,7 +110,10 @@ public sealed class GenerationFlow
 			else
 			{
 				for ( var i = 0; i < results.Count; i++ )
-					AddResult( results[i], record, results.Count > 1 ? $"{baseName} {i + 1}" : baseName, i == 0 );
+				{
+					var (result, name, select) = (results[i], results.Count > 1 ? $"{baseName} {i + 1}" : baseName, i == 0);
+					UI.FrameProbe.Time( "result: add clip", () => AddResult( result, record, name, select ) );
+				}
 			}
 			var made = _session.Workspace.Clips.Except( before ).ToList();
 			if ( replace ) made.Insert( 0, target );
@@ -164,7 +167,7 @@ public sealed class GenerationFlow
 			Looping = false,
 		};
 		clip.Generation.Seed = motion.Seed;
-		ClipCleanup.GenerateFootsteps( clip, _session.Rig );
+		UI.FrameProbe.Time( "result: footsteps", () => ClipCleanup.GenerateFootsteps( clip, _session.Rig ) );
 		_session.AddClip( clip, select );
 	}
 
