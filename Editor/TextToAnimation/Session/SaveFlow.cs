@@ -167,6 +167,70 @@ public sealed class SaveFlow
 		}
 	}
 
+	/// <summary>
+	/// The model's source FBX that can take a clip: an FBX 7.x file its vmdl (or a prefab it includes) renders, the one
+	/// holding most of the skeleton's bones; null when there is none (no FBX source, or only FBX 6 files).
+	/// </summary>
+	public string ModelFbx()
+	{
+		var vmdl = _session.ModelAsset is null ? null : ModelBridge.SourcePathOf( _session.ModelAsset );
+		var text = _session.VmdlText;
+		if ( vmdl is null || string.IsNullOrEmpty( text ) || _session.Rig is null ) return null;
+		// reading and parsing the model's FBX files takes a moment: once per model and vmdl text
+		var key = vmdl + "|" + text.GetHashCode();
+		if ( _modelFbxKey == key ) return _modelFbx;
+		_modelFbxKey = key;
+		return _modelFbx = FindModelFbx( vmdl, text );
+	}
+	string _modelFbxKey, _modelFbx;
+
+	string FindModelFbx( string vmdl, string text )
+	{
+		var texts = new List<string> { text };
+		texts.AddRange( EngineThread.Try( () => VmdlSources.IncludedPrefabTexts( text, vmdl ) ) ?? new List<string>() );
+		var bones = _session.Rig.Skeleton.Bones.Select( b => b.Name ).ToList();
+		return texts.SelectMany( t => System.Text.RegularExpressions.Regex.Matches( t, @"filename\s*=\s*""([^""]+\.fbx)""", System.Text.RegularExpressions.RegexOptions.IgnoreCase ) )
+			.Select( m => EngineThread.Try( () => VmdlSources.Resolve( m.Groups[1].Value, vmdl ) ) )
+			.Where( p => p is not null && File.Exists( p ) ).Distinct( StringComparer.OrdinalIgnoreCase )
+			.Select( p => (Path: p, Bytes: EngineThread.Try( () => File.ReadAllBytes( p ) )) )
+			.Where( f => f.Bytes is not null && Formats.Fbx.FbxClipExport.CanWriteInto( f.Bytes ) )
+			.Select( f => (f.Path, Matches: Formats.Fbx.FbxClipExport.MatchingBones( f.Bytes, bones )) )
+			.Where( f => f.Matches >= 2 )
+			.OrderByDescending( f => f.Matches ).Select( f => f.Path ).FirstOrDefault();
+	}
+
+	/// <summary>
+	/// Writes <paramref name="clip"/> as an FBX: the model's own source FBX (mesh, skin, materials) carrying the clip
+	/// when <paramref name="withModel"/>, else the skeleton with the clip.
+	/// </summary>
+	public bool ExportFbx( AnimClip clip, string file, bool withModel )
+	{
+		if ( clip is null || _session.Rig is null ) return false;
+		try
+		{
+			var bones = _session.Rig.Skeleton.Bones.Select( b => new Formats.Fbx.FbxClipExport.Bone( b.Name, b.ParentIndex, b.RestLocal ) ).ToList();
+			var frames = FinalFrames( clip );
+			byte[] bytes;
+			var note = "";
+			if ( withModel )
+			{
+				var source = ModelFbx() ?? throw new InvalidOperationException( "This model has no FBX 2011-or-newer source to carry the animation - export the skeleton with the animation instead." );
+				bytes = Formats.Fbx.FbxClipExport.WriteIntoSource( File.ReadAllBytes( source ), bones, frames, clip.Fps, clip.EffectiveSequenceName, out var report );
+				note = $" ({Path.GetFileName( source )}: {report})";
+			}
+			else bytes = Formats.Fbx.FbxClipExport.WriteSkeleton( bones, frames, clip.Fps, clip.EffectiveSequenceName );
+			Directory.CreateDirectory( Path.GetDirectoryName( file )! );
+			File.WriteAllBytes( file, bytes );
+			_session.SetStatus( $"Exported {Path.GetFileName( file )}{note}.", UI.Tone.Accent );
+			return true;
+		}
+		catch ( Exception e )
+		{
+			_session.SetStatus( $"FBX export failed: {e.Message}", UI.Tone.Red );
+			return false;
+		}
+	}
+
 	/// <summary>The root compensation measured for this model (null until a save measured one).</summary>
 	System.Numerics.Quaternion? RootCompensation => _session.Workspace?.RootCompensation is { Length: 4 } c
 		? new System.Numerics.Quaternion( c[0], c[1], c[2], c[3] ) : null;

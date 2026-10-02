@@ -320,6 +320,25 @@ public static class EditorGate
 		window.Save.Export( imported, exportDir );
 		Check( "export writes dmx + vmdl", Directory.Exists( exportDir ) && Directory.GetFiles( exportDir, "*.dmx" ).Length == 1 && Directory.GetFiles( exportDir, "*.vmdl" ).Length == 1 );
 
+		// ---- 10b. FBX export: the skeleton with the clip, and the model's own FBX carrying it - which s&box imports
+		// back as a model whose sequence moves every bone as the clip does
+		{
+			var fbxDir = Path.Combine( assets, "t2a_gate_fbx" );
+			var skeletonFbx = Path.Combine( fbxDir, "clip_skeleton.fbx" );
+			var modelFbx = Path.Combine( fbxDir, "clip_model.fbx" );
+			var skeletonOk = window.Save.ExportFbx( imported, skeletonFbx, false );
+			var source = window.Save.ModelFbx();
+			var modelOk = source is not null && window.Save.ExportFbx( imported, modelFbx, true );
+			Check( "FBX export writes the skeleton with the animation", skeletonOk && File.Exists( skeletonFbx ), skeletonFbx );
+			Check( "FBX export writes the model with the animation", modelOk && File.Exists( modelFbx ), source ?? "no source FBX found" );
+			if ( modelOk )
+			{
+				var playback = await FbxPlaybackAsync( modelFbx, imported, session.Rig );
+				await EngineThread.SwitchToMainThread();
+				Check( "the exported model FBX plays the animation in s&box", playback.Ok, playback.Detail );
+			}
+		}
+
 		// ---- 11. workspace persists across reopen
 		var clipCount = session.Workspace.Clips.Count;
 		session.FlushSave();
@@ -894,6 +913,57 @@ public static class EditorGate
 
 	/// <summary>Writes the engine skeleton (rest locals) and what the shape analysis made of it, for offline tests.</summary>
 	/// <summary>What upstream UniMate's preparation made of a rig: joints (BFS), clean names, facing, skin data, trims.</summary>
+	/// <summary>
+	/// Imports an exported model FBX (its mesh and its animation) as a new model and plays the animation in the engine:
+	/// every bone's rotation change since the first frame must be the clip's (an angle, so it holds whatever axes and
+	/// units the import chose).
+	/// </summary>
+	static async Task<(bool Ok, string Detail)> FbxPlaybackAsync( string fbx, AnimClip clip, MotionRig rig )
+	{
+		await EngineThread.SwitchToMainThread();
+		var bytes = File.ReadAllBytes( fbx );
+		var relative = Path.GetRelativePath( StarterModels.AssetsRoot, fbx ).Replace( '\\', '/' );
+		var vmdlPath = Path.ChangeExtension( fbx, ".vmdl" );
+		var text = StarterModels.KeepAllBones( Vmdl.VmdlWriter.GenerateStandalone( "", new[] { new Vmdl.AnimEntry { Name = "exported", SourceFilename = relative } },
+			0.3937f * StarterModels.FbxUnitScaleCm( bytes ), "", meshFilePath: relative ), StarterModels.FbxBoneNames( bytes ) );
+		File.WriteAllText( vmdlPath, text );
+		var result = await VmdlCompiler.RegisterAndCompileAsync( vmdlPath, new[] { fbx } );
+		await EngineThread.SwitchToMainThread();
+		if ( !result.Compiled ) return (false, $"compile: {result.Error}");
+		var model = await ModelBridge.LoadAsync( result.Asset.Path );
+		await EngineThread.SwitchToMainThread();
+		if ( model is null || model.IsError ) return (false, "the model didn't load");
+		if ( !model.AnimationNames.Contains( "exported" ) ) return (false, $"no 'exported' sequence ({string.Join( ",", model.AnimationNames.Take( 5 ) )})");
+		var world = new SceneWorld();
+		try
+		{
+			var so = new SceneModel( world, model, Transform.Zero ) { UseAnimGraph = false };
+			so.CurrentSequence.Name = "exported";
+			so.Update( 0f );
+			var s = rig.Skeleton;
+			var frames = clip.EvaluateFrames( s );
+			var names = Enumerable.Range( 0, s.Count ).Where( b => model.Bones.GetBone( s[b].Name ) is not null ).ToList();
+			System.Numerics.Quaternion Rot( int b ) { var r = so.GetBoneWorldTransform( model.Bones.GetBone( s[b].Name ).Index ).Rotation; return new System.Numerics.Quaternion( r.x, r.y, r.z, r.w ); }
+			Maths.XForm[] Worlds( Maths.XForm[] locals ) { var w = new Maths.XForm[s.Count]; for ( var b = 0; b < s.Count; b++ ) w[b] = s[b].ParentIndex < 0 ? locals[b] : Maths.XForm.Compose( w[s[b].ParentIndex], locals[b] ); return w; }
+			so.CurrentSequence.Time = 0; so.Update( 0f );
+			var engine0 = names.ToDictionary( b => b, Rot );
+			var clip0 = Worlds( frames[0] );
+			float worst = 0; var where = "";
+			for ( var f = 1; f < frames.Count; f += 3 )
+			{
+				so.CurrentSequence.Time = f / clip.Fps; so.Update( 0f );
+				var clipF = Worlds( frames[f] );
+				foreach ( var b in names )
+				{
+					var d = MathF.Abs( Maths.MathQ.AngleBetween( Rot( b ), engine0[b] ) - Maths.MathQ.AngleBetween( clipF[b].Rot, clip0[b].Rot ) ) * 180 / MathF.PI;
+					if ( d > worst ) { worst = d; where = $"{s[b].Name} frame {f}"; }
+				}
+			}
+			return (names.Count > s.Count / 3 && worst < 1f, $"{names.Count} bones; rotation change differs by up to {worst:0.00} deg ({where})");
+		}
+		finally { world.Delete(); }
+	}
+
 	static object UniMateDump( MotionRig rig )
 	{
 		try

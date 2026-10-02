@@ -542,6 +542,12 @@ public sealed class TextToAnimationWindow : Widget
 		menu.AddSeparator();
 		menu.AddOption( "Replace existing in model…", "swap_horiz", ReplaceExisting ).Enabled = clip is not null;
 		menu.AddOption( "Export .dmx…", "file_download", ExportClip ).Enabled = clip is not null;
+		menu.AddOption( "Export FBX (skeleton + animation)…", "file_download", () => ExportFbx( false ) ).Enabled = clip is not null;
+		var withModel = menu.AddOption( "Export FBX (model + animation)…", "file_download", () => ExportFbx( true ) );
+		var source = clip is null ? null : Save.ModelFbx();
+		withModel.Enabled = source is not null;
+		withModel.ToolTip = source is not null ? $"{Path.GetFileName( source )} with this animation (mesh, skin and materials as they are)"
+			: "Needs the model's source FBX (FBX 2011 or newer)";
 		menu.AddSeparator();
 		menu.AddOption( "Shortcuts and help (F1)", "help_outline", () => ShowHelp() );
 		menu.OpenAtCursor();
@@ -568,6 +574,18 @@ public sealed class TextToAnimationWindow : Widget
 		var file = EditorUtility.SaveFileDialog( "Export animation", "dmx", start );
 		if ( string.IsNullOrEmpty( file ) ) return;
 		Save.Export( clip, Path.GetDirectoryName( file )! );
+	}
+
+	void ExportFbx( bool withModel )
+	{
+		var clip = Session.ActiveClip;
+		if ( clip is null ) { SetStatus( "Open an animation first.", Tone.Amber ); return; }
+		var assets = Project.Current?.GetAssetsPath() ?? "";
+		var name = clip.EffectiveSequenceName + (withModel ? "_model" : "");
+		var file = EditorUtility.SaveFileDialog( withModel ? "Export model with animation (FBX)" : "Export animation (FBX)", "fbx", Path.Combine( assets, "animations", name + ".fbx" ) );
+		if ( string.IsNullOrEmpty( file ) ) return;
+		if ( !file.EndsWith( ".fbx", StringComparison.OrdinalIgnoreCase ) ) file += ".fbx";
+		Save.ExportFbx( clip, file, withModel );
 	}
 
 	void TogglePlay()
