@@ -12,12 +12,15 @@ Run: D:\\99-scratch\\unimate\\.venv\\Scripts\\python.exe make_dataset_fixtures.p
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, r"D:\99-scratch\unimate-fixtures")
 from unimate_ref import *  # noqa: E402,F401  (euler_sample, TextEncoder, quaternion helpers)
 from Quaternions import Quaternions  # noqa: E402
 from unimate.configs.schema import MainConfig  # noqa: E402
-from unimate.models.factory import create_model  # noqa: E402
+from unimate.models.factory import create_model, create_transport  # noqa: E402
+from unimate.models.flow.transport import Sampler  # noqa: E402
+from unimate.inference.generate import ClassifierFreeSampleModel  # noqa: E402
 from unimate.training.ema import EMAModel  # noqa: E402
 from unimate.utils.motion_utils import recover_unimate_joint_pos_from_rot  # noqa: E402
 from unimate.dataset.transforms import extract_conditions, apply_normalization, apply_padding, build_parent_features  # noqa: E402
@@ -29,7 +32,7 @@ FIX = sys.argv[1]
 DATA = r"D:\99-scratch\uniml3d"
 CACHE = r"P:\02-projects\unimate-cache"
 EXP = "unimate_uniml3d_f60_v2"
-STEPS, CFG, SEED = 24, 3.0, 4321
+CFG, SEED = 3.0, 4321
 CASES = [  # (dataset, object type, prompt)
     ("mixamo", "mixamo", "An object walks forward."),
     ("mixamo", "mixamo", "An object jumps."),
@@ -51,12 +54,16 @@ model.load_state_dict(sd["model_state_dict"])
 ema = EMAModel(parameters=model.parameters(), decay=0.9999, use_ema_warmup=True)
 ema.load_state_dict(sd["ema_state_dict"]); ema.copy_to(model.parameters())
 model.eval()
+gen_diffusion = Sampler(create_transport(training_config=cfg.training))  # sample.py's _build_diffusion for 'flow'
 stats_all = np.load(os.path.join(CACHE, EXP, "dataset_stats.npy"), allow_pickle=True).item()
 MJ, T = cfg.dataset.max_joints, cfg.dataset.max_motion_length
 te = TextEncoder()
 conds = {ds: np.load(os.path.join(DATA, f"features__{ds}__cond.npy"), allow_pickle=True).item() for ds in {c[0] for c in CASES}}
 
+ONLY = [o for o in os.environ.get("T2A_CASES", "").split(",") if o]  # restrict to these object types
 for dataset, object_type, prompt in CASES:
+    if ONLY and object_type not in ONLY:
+        continue
     c = conds[dataset][object_type]
     parents = np.array(c["parents"])
     J = len(parents)
@@ -89,7 +96,17 @@ for dataset, object_type, prompt in CASES:
     _, cond = mixture_batch_collate([batch])
 
     noise = torch.randn((1, mj, 12, T), generator=torch.Generator().manual_seed(SEED))
-    x = euler_sample(model, cond, noise, cfg=CFG, steps=STEPS)
+    # upstream's own sampling call (generate_samples, text-to-motion): dopri5 through the CFG wrapper
+    with torch.no_grad():
+        cfg_model = ClassifierFreeSampleModel(model, cfg_scale=CFG)
+        calls = [0]
+        def counted(x, t, cond=None):
+            calls[0] += 1
+            return cfg_model(x, t, cond=cond)
+        counted.cond_mask_prob = model.cond_mask_prob
+        t_start = time.time()
+        x = gen_diffusion.sample_ode()(noise, counted, cond=cond)[-1]
+        print(f"  dopri5: {calls[0]} network calls, {time.time() - t_start:.1f} s", flush=True)
     feat = x[0, :J].permute(2, 0, 1).numpy() * std[None] + mean[None]
     pos = recover_unimate_joint_pos_from_rot(feat, parents, offsets_from_positions(tpos, parents))
 
@@ -99,7 +116,7 @@ for dataset, object_type, prompt in CASES:
              spectral=np.array(c["spectral_feats"], float), name_emb=joint_emb,
              cond_tpos=cond["tpos_first_frame"][0, :J].numpy())
     with open(os.path.join(FIX, f"ds_{tag}.json"), "w") as f:
-        json.dump(dict(dataset=dataset, object_type=object_type, prompt=prompt, steps=STEPS, cfg=CFG,
+        json.dump(dict(dataset=dataset, object_type=object_type, prompt=prompt, sampler="dopri5", cfg=CFG,
                        parents=[int(p) for p in parents], joint_names=list(c["joint_names"]), clean_joint_names=clean,
                        face=dict(r=int(c["face_joint_idxs"]["r_hip"]), l=int(c["face_joint_idxs"]["l_hip"]),
                                  body_axis=bool(c["face_joint_idxs"]["body_axis"]))), f)

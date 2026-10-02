@@ -26,8 +26,10 @@ public sealed class PreparedSkeleton
 /// <summary>
 /// ODE integrators for the flow: Euler (1 model call per step, 1st order), Heun (2 calls, 2nd order) and
 /// Adams-Bashforth 2 (1 call per step, 2nd order: reuses the previous step's velocity).
+/// Dopri5: upstream's text-to-motion sampler (Sampler.sample_ode: torchdiffeq dopri5, adaptive, rtol 1e-3,
+/// atol 1e-6, t from 0 to 1) - integrates the flow to convergence.
 /// </summary>
-public enum Integrator { Euler, Heun, AdamsBashforth2 }
+public enum Integrator { Euler, Heun, AdamsBashforth2, Dopri5 }
 
 /// <summary>Sampling settings.</summary>
 public sealed class SampleSettings
@@ -46,6 +48,9 @@ public sealed class SampleSettings
 	public float[] Known { get; init; }
 	/// <summary>(J,12,T) mask of values held to <see cref="Known"/> (replacement sampling).</summary>
 	public bool[] Keep { get; init; }
+	/// <summary>Dopri5 tolerances (upstream's sample_ode defaults).</summary>
+	public double RelativeTolerance { get; init; } = 1e-3;
+	public double AbsoluteTolerance { get; init; } = 1e-6;
 }
 
 /// <summary>
@@ -229,6 +234,12 @@ public sealed class UniMateModel
 				if ( keep[i] ) state[i] = (1 - t) * noise[i] + t * k[i];
 		}
 
+		if ( settings.Method == Integrator.Dopri5 )
+		{
+			if ( settings.Keep is not null || t0 > 0 ) throw new ArgumentException( "Dopri5 samples from noise without constraints (upstream's text-to-motion)." );
+			return Dopri5( x, Velocity, settings.RelativeTolerance, settings.AbsoluteTolerance, progress, token );
+		}
+
 		// time grid from t0 to 1 (optionally shifted towards the start)
 		var grid = new float[steps + 1];
 		var shift = settings.TimeShift > 0f ? settings.TimeShift : 1f;
@@ -353,6 +364,107 @@ public sealed class UniMateModel
 			_gpuRefused.Add( joints );
 		}
 		GpuAcceleration.Status = why;
+	}
+
+	/// <summary>
+	/// torchdiffeq's dopri5 (Dormand-Prince 5(4) with its step control, initial step and 4th-order interpolation), as
+	/// upstream's Sampler.sample_ode calls it: from t = 0 to 1, RMS error norm, safety 0.9, growth at most 10x,
+	/// shrink at most 5x (none after an accepted step). The last step may pass t = 1; the result is interpolated there.
+	/// </summary>
+	public static float[] Dopri5( float[] y0, Func<float[], float, float[]> f, double rtol, double atol, Action<float> progress, CancellationToken token )
+	{
+		var n = y0.Length;
+		double[] A = { 1 / 5.0, 3 / 10.0, 4 / 5.0, 8 / 9.0, 1.0, 1.0 };
+		double[][] B =
+		{
+			new[] { 1 / 5.0 },
+			new[] { 3 / 40.0, 9 / 40.0 },
+			new[] { 44 / 45.0, -56 / 15.0, 32 / 9.0 },
+			new[] { 19372 / 6561.0, -25360 / 2187.0, 64448 / 6561.0, -212 / 729.0 },
+			new[] { 9017 / 3168.0, -355 / 33.0, 46732 / 5247.0, 49 / 176.0, -5103 / 18656.0 },
+			new[] { 35 / 384.0, 0, 500 / 1113.0, 125 / 192.0, -2187 / 6784.0, 11 / 84.0 },
+		};
+		double[] E = { 35 / 384.0 - 1951 / 21600.0, 0, 500 / 1113.0 - 22642 / 50085.0, 125 / 192.0 - 451 / 720.0,
+			-2187 / 6784.0 - -12231 / 42400.0, 11 / 84.0 - 649 / 6300.0, -1.0 / 60.0 };
+		double[] Mid = { 6025192743 / 30085553152.0 / 2, 0, 51252292925 / 65400821598.0 / 2, -2691868925 / 45128329728.0 / 2,
+			187940372067 / 1594534317056.0 / 2, -1776094331 / 19743644256.0 / 2, 11237099 / 235043384.0 / 2 };
+		const double Safety = 0.9, IFactor = 10, DFactor = 0.2;
+		const int Order = 5;
+		double Rms( Func<int, double> v ) { var s = 0.0; for ( var i = 0; i < n; i++ ) { var x = v( i ); s += x * x; } return Math.Sqrt( s / n ); }
+
+		// initial step (Hairer, Norsett & Wanner II.4), with the solver's order - 1 as torchdiffeq passes it
+		var fy0 = f( y0, 0f );
+		var d0 = Rms( i => y0[i] / (atol + Math.Abs( y0[i] ) * rtol ) );
+		var d1 = Rms( i => fy0[i] / (atol + Math.Abs( y0[i] ) * rtol ) );
+		var h0 = d0 < 1e-5 || d1 < 1e-5 ? 1e-6 : 0.01 * d0 / d1;
+		var probe = new float[n];
+		for ( var i = 0; i < n; i++ ) probe[i] = (float)(y0[i] + h0 * fy0[i]);
+		var fProbe = f( probe, (float)h0 );
+		var d2 = Rms( i => (fProbe[i] - fy0[i]) / (atol + Math.Abs( y0[i] ) * rtol ) ) / h0;
+		var h1 = d1 <= 1e-15 && d2 <= 1e-15 ? Math.Max( 1e-6, h0 * 1e-3 ) : Math.Pow( 0.01 / Math.Max( d1, d2 ), 1.0 / Order );
+		var dt = Math.Min( 100 * h0, h1 );
+
+		var y = (float[])y0.Clone();
+		var fy = fy0;
+		double t = 0;
+		var k = new float[7][];
+		while ( true )
+		{
+			token.ThrowIfCancellationRequested();
+			var t1 = t + dt;
+			k[0] = fy;
+			var yi = new float[n];
+			for ( var s = 0; s < 6; s++ )
+			{
+				var b = B[s];
+				for ( var i = 0; i < n; i++ )
+				{
+					var acc = 0.0;
+					for ( var j = 0; j <= s; j++ ) acc += k[j][i] * (b[j] * dt);
+					yi[i] = (float)(y[i] + acc);
+				}
+				var ts = A[s] == 1.0 ? t1 : t + A[s] * dt;
+				k[s + 1] = f( yi, (float)ts );
+				if ( s < 5 ) yi = new float[n];
+			}
+			// the 6th stage is the 5th-order solution (FSAL: k[6] is its derivative)
+			var y1 = yi;
+			var ratio = Rms( i =>
+			{
+				var err = 0.0;
+				for ( var j = 0; j < 7; j++ ) err += k[j][i] * (dt * E[j]);
+				return err / (atol + rtol * Math.Max( Math.Abs( y[i] ), Math.Abs( y1[i] ) ));
+			} );
+			var accept = ratio <= 1;
+			var factor = ratio == 0 ? IFactor : Math.Min( IFactor, Math.Max( Safety / Math.Pow( ratio, 1.0 / Order ), accept ? 1.0 : DFactor ) );
+			if ( accept )
+			{
+				if ( t1 >= 1.0 )
+				{
+					// 4th-order interpolation of this step at t = 1
+					var x = (1.0 - t) / dt;
+					var result = new float[n];
+					for ( var i = 0; i < n; i++ )
+					{
+						var mid = 0.0;
+						for ( var j = 0; j < 7; j++ ) mid += k[j][i] * (dt * Mid[j]);
+						double ym = y[i] + mid, a0 = y[i], a1 = y1[i], f0 = k[0][i], f1 = k[6][i];
+						var ca = 2 * dt * (f1 - f0) - 8 * (a1 + a0) + 16 * ym;
+						var cb = dt * (5 * f0 - 3 * f1) + 18 * a0 + 14 * a1 - 32 * ym;
+						var cc = dt * (f1 - 4 * f0) - 11 * a0 - 5 * a1 + 16 * ym;
+						var cd = dt * f0;
+						result[i] = (float)(a0 + x * cd + x * x * cc + x * x * x * cb + x * x * x * x * ca);
+					}
+					progress?.Invoke( 1f );
+					return result;
+				}
+				y = y1;
+				fy = k[6];
+				t = t1;
+				progress?.Invoke( (float)Math.Min( 0.99, t ) );
+			}
+			dt *= factor;
+		}
 	}
 
 	/// <summary>Standard normal noise (J,12,T) from a seed (Box-Muller).</summary>

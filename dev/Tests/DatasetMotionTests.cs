@@ -84,7 +84,10 @@ public class DatasetMotionTests
         var noiseUp = z["noise"].Values; var noise = new float[J * 12 * T];
         for (var u = 0; u < J; u++) Array.Copy(noiseUp, u * 12 * T, noise, cOf[u] * 12 * T, 12 * T);
         var caption = z["caption_emb"].Values;
-        var settings = new SampleSettings { Steps = j.GetProperty("steps").GetInt32(), Guidance = j.GetProperty("cfg").GetSingle(), Method = Integrator.Euler };
+        // upstream's text-to-motion sampler: dopri5 to convergence (the port's own); older references used fixed Euler
+        var settings = j.TryGetProperty("steps", out var fixedSteps)
+            ? new SampleSettings { Method = Integrator.Euler, Steps = fixedSteps.GetInt32(), Guidance = j.GetProperty("cfg").GetSingle() } // older references: fixed Euler
+            : new SampleSettings { Method = Integrator.Dopri5, Guidance = j.GetProperty("cfg").GetSingle() };
         var fkUp = z["fk_pos"].Values;
         var parentsC = uni.Skeleton.Parents;
 
@@ -123,10 +126,32 @@ public class DatasetMotionTests
         var emb = z["name_emb"].Values; var width = emb.Length / J; var names2 = new float[J * width];
         for (var u = 0; u < J; u++) Array.Copy(emb, u * width, names2, cOf[u] * width, width);
         inputs["name_emb"] = Tensor.Float(new[] { J, width }, names2);
-        var exact = Compare(datasetStats, model.Prepare(uni.Skeleton, inputs, default));
+        var preparedExact = model.Prepare(uni.Skeleton, inputs, default);
+        var exact = Compare(datasetStats, preparedExact);
         _out.WriteLine($"  with the dataset's names and spectral features: mean {exact.Mean:0.00000}, max {exact.Worst:0.00000}");
+        if (Environment.GetEnvironmentVariable("T2A_SAMPLER_STUDY") == "1")
+            foreach (var (name, alt) in new (string, SampleSettings)[]
+            {
+                ("old default: Adams-Bashforth 16 calls", new SampleSettings { Method = Integrator.AdamsBashforth2, Steps = 16, TimeShift = 0.5f, Guidance = settings.Guidance }),
+                ("Euler 50", new SampleSettings { Method = Integrator.Euler, Steps = 50, Guidance = settings.Guidance }),
+                ("Euler 100", new SampleSettings { Method = Integrator.Euler, Steps = 100, Guidance = settings.Guidance }),
+                ("dopri5 rtol 1e-2", new SampleSettings { Method = Integrator.Dopri5, RelativeTolerance = 1e-2, AbsoluteTolerance = 1e-5, Guidance = settings.Guidance }),
+                ("dopri5 rtol 3e-3", new SampleSettings { Method = Integrator.Dopri5, RelativeTolerance = 3e-3, Guidance = settings.Guidance }),
+            })
+            {
+                var keepSettings = settings;
+                settings = alt;
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var alternative = Compare(datasetStats, preparedExact);
+                settings = keepSettings;
+                _out.WriteLine($"  {name} vs upstream's dopri5: mean {alternative.Mean:0.0000}, max {alternative.Worst:0.0000} ({watch.ElapsedMilliseconds} ms)");
+            }
 
-        Assert.True(exact.Worst < 5e-3f, $"same inputs, different motion: {exact.Worst}");
+        // fixed-step references must match to rounding; dopri5 ones up to the solver's own tolerance: upstream pads the
+        // batch to 71 joint slots whose (meaningless) velocities enter its RMS error norm and so its step sizes
+        // (the solver itself matches torchdiffeq exactly: Dopri5Tests)
+        var limit = settings.Method == Integrator.Dopri5 ? 0.06f : 5e-3f;
+        Assert.True(exact.Worst < limit, $"same inputs, different motion: {exact.Worst}");
         if (dataset != "objaverse") // an Objaverse skeleton may look like a person or an animal; upstream still uses Objaverse's
             Assert.Equal(expected, uni.Family);
         // the dataset's curated joint names differ from what upstream's own name rule (the port's) makes of a new rig;

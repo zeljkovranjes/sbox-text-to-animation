@@ -101,7 +101,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 					var wanted = request.DurationSeconds > 0 ? request.DurationSeconds : Capabilities.DefaultSeconds;
 					while ( segments.Count * (Window - Overlap) + Overlap < wanted * UniMateModel.Fps && segments.Count < 20 )
 						segments.Add( segments[^1] );
-					frames = Chain( uniRig, prep, segments.Select( UniMatePrompt.ToCaption ).ToList(), seed, steps, guidance, null, null, null, 0f, Report, token );
+					frames = TextChain( uniRig, prep, segments.Select( UniMatePrompt.ToCaption ).ToList(), seed, steps, guidance, Report, token );
 					if ( request.Mode == GenerationMode.TextToMotion && wanted > 0 )
 					{
 						var keep = Math.Clamp( (int)MathF.Round( wanted * UniMateModel.Fps ) + 1, 2, frames.Count );
@@ -154,6 +154,74 @@ public sealed class UniMateGenerator : IMotionGenerator
 	}
 
 	/// <summary>
+	/// Text to motion as upstream generates it (sample.py with motion expansion): the first window freely (dopri5),
+	/// each further window with its first <see cref="Overlap"/> frames held to the previous window's last ones
+	/// (replacement sampling, in the network's feature space), the windows' features joined at the seams and decoded
+	/// once - so the root path and the poses run on continuously across windows.
+	/// </summary>
+	List<XForm[]> TextChain( UniMateRig uniRig, PreparedSkeleton prep, List<string> captions, int seed, int steps, float guidance,
+		Action<string, float> report, CancellationToken token )
+	{
+		var J = uniRig.Count;
+		const int T = Window;
+		var stats = UniMateStats.For( uniRig.Family );
+		var windows = captions.Count;
+		var total = T + (windows - 1) * (T - Overlap);
+		var feat = new float[total, J, 12];
+		float[] previous = null;
+		for ( var w = 0; w < windows; w++ )
+		{
+			token.ThrowIfCancellationRequested();
+			var embedding = _model.Text.Encode( captions[w], token );
+			var noise = UniMateModel.Noise( J, seed + w * 104729 );
+			SampleSettings settings;
+			if ( previous is null ) settings = FreeSampler( steps, guidance );
+			else
+			{
+				var known = new float[J * 12 * T];
+				var keep = new bool[J * 12 * T];
+				for ( var jc = 0; jc < J * 12; jc++ )
+					for ( var f = 0; f < Overlap; f++ )
+					{
+						known[jc * T + f] = previous[jc * T + T - Overlap + f];
+						keep[jc * T + f] = true;
+					}
+				settings = ConstrainedSampler( steps, guidance, known, keep, 0f );
+			}
+			var windowIndex = w;
+			var x = _model.Sample( prep, embedding, noise, settings,
+				f => report( windows > 1 ? $"Generating part {windowIndex + 1} of {windows}" : "Generating", (windowIndex + f) / windows ), token );
+			previous = x;
+			var wf = UniMateFeatures.FromModel( x, J, T, stats );
+			var start = w == 0 ? 0 : Overlap;
+			var at = w == 0 ? 0 : T + (w - 1) * (T - Overlap);
+			for ( var f = start; f < T; f++ )
+				for ( var j = 0; j < J; j++ )
+					for ( var c = 0; c < 12; c++ )
+						feat[at + f - start, j, c] = wf[f, j, c];
+		}
+		var motion = UniMateFeatures.Decode( feat, uniRig.Skeleton.Parents );
+		return uniRig.ToFrames( UniMateFeatures.ToSource( motion, uniRig.Skeleton ), null );
+	}
+
+	/// <summary>
+	/// Free sampling as upstream samples (Sampler.sample_ode: dopri5 integrated to convergence, rtol 1e-3, atol 1e-6).
+	/// "Fast" loosens the tolerance (rtol 1e-2: within 0.004 of upstream's motion on a body of diameter 2, a few
+	/// dozen calls fewer). Fixed-step shortcuts are not offered: 16 Adams-Bashforth calls land 0.46 away from
+	/// upstream's motion, 50 Euler steps 0.13 (DatasetMotionTests, T2A_SAMPLER_STUDY).
+	/// </summary>
+	static SampleSettings FreeSampler( int steps, float guidance ) => steps <= 12
+		? new SampleSettings { Method = Integrator.Dopri5, Guidance = guidance, RelativeTolerance = 1e-2, AbsoluteTolerance = 1e-5 }
+		: new SampleSettings { Method = Integrator.Dopri5, Guidance = guidance };
+
+	/// <summary>
+	/// Sampling with held values (in-betweening, editing, window seams) as upstream does it (inbetween_sample_ode):
+	/// fixed-step Euler with replacement, 50 steps over the flow (fewer when a variation starts part-way along it).
+	/// </summary>
+	static SampleSettings ConstrainedSampler( int steps, float guidance, float[] known, bool[] keep, float startTime ) =>
+		new() { Method = Integrator.Euler, Steps = Math.Max( 8, (int)MathF.Round( 50 * (1 - startTime) ) ), Guidance = guidance, Known = known, Keep = keep, StartTime = startTime };
+
+	/// <summary>
 	/// Generates window after window. Each window is encoded from the current result (source frames, or the
 	/// motion generated so far) and holds: pinned frames, kept joints, and the overlap with the previous window.
 	/// </summary>
@@ -203,11 +271,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 				alignment = align;
 				known = UniMateFeatures.ToModel( feat, UniMateStats.For( uniRig.Family ), Window );
 			}
-			var (method, calls, shift) = Sampler( steps );
-			var settings = new SampleSettings
-			{
-				Steps = calls, Method = method, TimeShift = shift, Guidance = guidance, StartTime = startTime, Known = known, Keep = anyKeep ? keep : null,
-			};
+			var settings = ConstrainedSampler( steps, guidance, known, anyKeep ? keep : null, startTime );
 			var windowIndex = w;
 			var x = _model.Sample( prep, embedding, noise, settings,
 				f => report( windows.Count > 1 ? $"Generating part {windowIndex + 1} of {windows.Count}" : "Generating", (windowIndex + f) / windows.Count ), token );
@@ -250,18 +314,6 @@ public sealed class UniMateGenerator : IMotionGenerator
 		if ( keepPins ) GenerationConstraints.RestorePins( output, source, request.KeepFrames.Select( f => (int)MathF.Round( f * scale ) ) );
 	}
 
-	/// <summary>
-	/// The integrator for a quality level (the requested Euler-equivalent step count). Measured against the
-	/// converged solution (dev/Tests/SolverStudy): Adams-Bashforth 2 on a grid crowded towards the clean end
-	/// (shift 0.5) is as accurate as Euler with a third fewer model calls - 8 calls beat Euler 12, 16 match
-	/// Euler 24. Higher levels keep Euler, which converges further.
-	/// </summary>
-	public static (Integrator Method, int Calls, float Shift) Sampler( int requestedSteps ) => requestedSteps switch
-	{
-		<= 12 => (Integrator.AdamsBashforth2, 8, 0.5f),
-		<= 24 => (Integrator.AdamsBashforth2, 16, 0.5f),
-		_ => (Integrator.Euler, requestedSteps, 1f),
-	};
 
 	static List<XForm[]> Resample( List<XForm[]> frames, float fromFps, float toFps )
 	{
