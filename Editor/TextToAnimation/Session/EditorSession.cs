@@ -523,6 +523,9 @@ public sealed class EditorSession
 	async Task SaveSoonAsync()
 	{
 		await EngineThread.DelayOnMain( 750 );
+		// not while a generation runs: the save shares the main thread (and the disk) with the model loading and the
+		// GPU work, where it showed as a 170 ms hitch; nothing it would write changes until the result arrives
+		while ( Busy ) await EngineThread.DelayOnMain( 250 );
 		FlushSave();
 	}
 
