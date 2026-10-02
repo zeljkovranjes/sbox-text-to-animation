@@ -19,6 +19,18 @@ public class UniMatePromptTests
     [InlineData("slowly wave hello", "An object slowly waves hello.")]
     [InlineData("An object runs.", "An object runs.")]
     [InlineData("cry", "An object cries.")]
+    [InlineData("a bipedal punches forward", "An object punches forward.")]
+    [InlineData("A dangerous robot in armor swings its arm", "An object swings its arm.")]
+    [InlineData("my character kicks with the right leg", "An object kicks with the right leg.")]
+    [InlineData("a person punch forward", "An object punches forward.")]
+    [InlineData("the boss walks", "An object walks.")]
+    [InlineData("a human punch forward", "An object punches forward.")]
+    [InlineData("A human does a front flip.", "An object does a front flip.")]
+    [InlineData("a cool robot jump over a box", "An object jumps over a box.")]
+    [InlineData("my knight swing a sword", "An object swings a sword.")]
+    [InlineData("a duck walks", "An object walks.")]
+    [InlineData("a person back flips", "An object back flips.")]
+    [InlineData("a tired man slowly walk home", "An object slowly walks home.")]
     public void Captions(string input, string expected) => Assert.Equal(expected, UniMatePrompt.ToCaption(input));
 
     [Fact]

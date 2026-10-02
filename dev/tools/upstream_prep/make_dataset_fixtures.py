@@ -36,6 +36,7 @@ CFG, SEED = 3.0, 4321
 CASES = [  # (dataset, object type, prompt)
     ("mixamo", "mixamo", "An object walks forward."),
     ("mixamo", "mixamo", "An object jumps."),
+    ("mixamo", "mixamo", "An object punches forward."),
     ("truebones", "Alligator", "An object walks forward."),
     ("truebones", "Crocodile", "An object walks forward."),
     ("truebones", "Dog", "An object walks forward."),
@@ -60,9 +61,9 @@ MJ, T = cfg.dataset.max_joints, cfg.dataset.max_motion_length
 te = TextEncoder()
 conds = {ds: np.load(os.path.join(DATA, f"features__{ds}__cond.npy"), allow_pickle=True).item() for ds in {c[0] for c in CASES}}
 
-ONLY = [o for o in os.environ.get("T2A_CASES", "").split(",") if o]  # restrict to these object types
+ONLY = [o for o in os.environ.get("T2A_CASES", "").split(",") if o]  # restrict to these object types (or prompts)
 for dataset, object_type, prompt in CASES:
-    if ONLY and object_type not in ONLY:
+    if ONLY and object_type not in ONLY and prompt not in ONLY:
         continue
     c = conds[dataset][object_type]
     parents = np.array(c["parents"])

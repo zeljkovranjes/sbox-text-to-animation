@@ -92,7 +92,7 @@ FIX = sys.argv[1]
 CACHE = r"P:\02-projects\unimate-cache"
 EXP = "unimate_uniml3d_f60_v2"
 UP = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], float)  # Blender Z-up -> Y-up (upstream apply_zup_to_yup)
-PROMPT = "An object walks forward."
+PROMPT = os.environ.get("T2A_PROMPT", "An object walks forward.")
 STEPS, CFG = 8, 3.0
 
 cfg = MainConfig.from_json(os.path.join(CACHE, EXP, "config.json"))
