@@ -73,6 +73,12 @@ public sealed class GenerationRequest
     /// <summary>Frames shared between consecutive expansion segments.</summary>
     public int ExpansionOverlapFrames { get; init; } = 10;
 
+    /// <summary>
+    /// Clean the generated motion (smooth jitter, lock planted feet). Off = the model's raw output. Pinned frames
+    /// and locked bones are restored afterwards either way.
+    /// </summary>
+    public bool CleanUp { get; init; } = true;
+
     /// <summary>Sampling steps (quality vs speed). 0 = model default.</summary>
     public int Steps { get; init; }
 

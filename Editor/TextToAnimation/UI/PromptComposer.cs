@@ -20,6 +20,8 @@ public sealed class PromptOptions
 	public int? Seed { get; set; }
 	public float VariationStrength { get; set; } = 0.5f;
 	public ChangeScope Scope { get; set; } = ChangeScope.WholeBody;
+	/// <summary>Smooth the generated motion and lock planted feet (off = the model's raw output).</summary>
+	public bool CleanUp { get; set; } = true;
 }
 
 /// <summary>
@@ -215,6 +217,10 @@ public sealed class PromptComposer : Widget
 		Choose( menu, "Best (slowest)", Options.Steps == 40, () => Options.Steps = 40 );
 		menu.AddSeparator();
 		var advanced = menu.AddMenu( "Advanced", "more_horiz" );
+		advanced.AddHeading( "Result" );
+		Choose( advanced, "Clean up (smooth, lock feet)", Options.CleanUp, () => Options.CleanUp = true );
+		Choose( advanced, "Raw model output", !Options.CleanUp, () => Options.CleanUp = false );
+		advanced.AddSeparator();
 		advanced.AddHeading( "Prompt strength" );
 		foreach ( var g in new[] { 2f, 3f, 4.5f } )
 			Choose( advanced, g switch { 2f => "Loose", 3f => "Normal", _ => "Strict" }, MathF.Abs( Options.Guidance - g ) < 0.01f, () => Options.Guidance = g );

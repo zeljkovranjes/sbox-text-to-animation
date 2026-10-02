@@ -164,7 +164,7 @@ public sealed class GenerationFlow
 	/// </summary>
 	public static GenerationRequest BuildRequest( EditorSession session, GenerationMode mode, IEnumerable<string> prompts,
 		float durationSeconds, int seed, int count, float guidance, int steps, float variationStrength,
-		IReadOnlyCollection<int> keepBones = null )
+		IReadOnlyCollection<int> keepBones = null, bool cleanUp = true )
 	{
 		var clip = session.ActiveClip;
 		var list = (prompts ?? Enumerable.Empty<string>()).Select( p => (p ?? "").Trim() ).ToList();
@@ -184,6 +184,7 @@ public sealed class GenerationFlow
 			Count = Math.Clamp( count, 1, 8 ),
 			Guidance = guidance,
 			Steps = steps,
+			CleanUp = cleanUp,
 			SourceFrames = usesClip ? session.ActiveFrames : null,
 			SourceFps = clip?.Fps ?? 30f,
 			KeepFrames = usesClip ? clip.PinnedFrames.ToList() : new List<int>(),

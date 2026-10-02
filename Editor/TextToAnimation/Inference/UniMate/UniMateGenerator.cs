@@ -146,6 +146,11 @@ public sealed class UniMateGenerator : IMotionGenerator
 			TwistBoneFollow.Apply( frames, rig.Rig, uniRig.AnimatedBones );
 			// back to the workspace frame rate
 			var output = Resample( frames, UniMateModel.Fps, request.OutputFps );
+			if ( request.CleanUp )
+			{
+				var cleaned = ClipCleanup.CleanGenerated( output, rig, request.OutputFps );
+				if ( cleaned.Length > 0 ) notes.Add( cleaned );
+			}
 			EnforceConstraints( output, request );
 			results.Add( new GeneratedMotion { Frames = output, Fps = request.OutputFps, Seed = seed, Notes = notes } );
 		}

@@ -53,7 +53,7 @@ public static class PromptRequests
 
 		var seed = options.Seed ?? Random.Shared.Next( 1, 99999 );
 		var request = GenerationFlow.BuildRequest( session, mode, new[] { prompt }, options.Seconds, seed, options.Takes,
-			options.Guidance, options.Steps, options.VariationStrength, keep );
+			options.Guidance, options.Steps, options.VariationStrength, keep, options.CleanUp );
 		var shortName = prompt.Length > 0 ? GenerationFlow.NameFromPrompt( prompt ) : null;
 		var name = mode switch
 		{
