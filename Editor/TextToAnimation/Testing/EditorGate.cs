@@ -326,13 +326,15 @@ public static class EditorGate
 		{
 			var vmdlFile = ModelBridge.SourcePathOf( asset );
 			var vmdlNow = File.ReadAllText( vmdlFile );
+			var bornUtc = File.GetCreationTimeUtc( vmdlFile );
 			File.Delete( vmdlFile );
+			await EngineThread.DelayOnMain( 2500 );
 			File.WriteAllText( vmdlFile, vmdlNow );
-			File.SetCreationTimeUtc( vmdlFile, DateTime.UtcNow ); // Windows gives a file re-made within 15 s its old creation time
+			File.SetCreationTimeUtc( vmdlFile, bornUtc ); // the worst case: Windows can give the new file the old one's creation time
 			var remade = new EditorSession();
 			var remadeError = await remade.OpenModelAsync( asset );
 			var oldFolder = Path.Combine( root, "text_to_animation", "workspaces", session.Workspace.Id.ToString( "N" ) );
-			Check( "a model made again at the same path starts with no animations", remadeError is null && remade.Workspace.Clips.Count == 0 && remade.LoadWarnings.Any( w => w.Contains( "new file" ) ),
+			Check( "a model made again at the same path starts with no animations", remadeError is null && remade.Workspace.Clips.Count == 0,
 				$"{remade.Workspace?.Clips.Count} clips; {string.Join( " ", remade.LoadWarnings )}" );
 			Check( "the old model's animations are kept", Directory.Exists( oldFolder ) && Directory.GetFiles( Path.Combine( oldFolder, "clips" ) ).Length == clipCount, oldFolder );
 		}

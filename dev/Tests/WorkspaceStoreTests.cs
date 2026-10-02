@@ -133,4 +133,21 @@ public class WorkspaceStoreTests : IDisposable
         Assert.Null(store.FindWorkspaceFor("models/citizen.vmdl"));
         Assert.Single(store.Load(ws.Id, _rig.Skeleton, new List<string>()).Clips);
     }
+
+    [Fact]
+    public void ADeletedModelIsForgottenButAReplacingSaveIsNot()
+    {
+        var gone = new DeletedModels();
+        var t = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+        // an editor saving by write-then-swap: the file is back within a moment
+        gone.Deleted(@"Models\Hero\Hero.vmdl", t);
+        gone.Created("models/hero/hero.vmdl", t.AddMilliseconds(50));
+        Assert.Empty(gone.Take(t.AddMinutes(1)));
+        // deleted for real, then a new model made at the same path minutes later
+        gone.Deleted("citizen.vmdl", t);
+        Assert.Empty(gone.Take(t.AddSeconds(1))); // not yet: could still be a replacing save
+        gone.Created("citizen.vmdl", t.AddMinutes(3));
+        Assert.Equal(new[] { "citizen.vmdl" }, gone.Take(t.AddMinutes(3)));
+        Assert.Empty(gone.Take(t.AddMinutes(4)));
+    }
 }

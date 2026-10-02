@@ -144,6 +144,7 @@ public sealed class EditorSession
 		await EngineThread.SwitchToMainThread();
 		if ( asset is null ) return "No model selected.";
 		FlushSave();
+		ModelDeletionWatch.Ensure( StarterModels.AssetsRoot );
 		var model = await ModelBridge.LoadAsync( asset.Path );
 		if ( model is null || model.IsError ) return $"{asset.Path} could not be loaded.";
 		if ( model.BoneCount == 0 ) return $"{asset.Name} has no skeleton - it can't be animated.";
@@ -200,6 +201,7 @@ public sealed class EditorSession
 		ws.SkeletonFingerprint = fingerprint;
 
 		ModelAsset = asset;
+		_modelDeleted = false;
 		Model = model;
 		Rig = rig;
 		Store = store;
@@ -518,11 +520,31 @@ public sealed class EditorSession
 		FlushSave();
 	}
 
+	/// <summary>
+	/// Forgets the workspaces of model files deleted since the last look (their files stay on disk), so a model made
+	/// again at such a path starts with no animations. True when the open model's own file was deleted: its workspace
+	/// is no longer saved (that would register it for the path again).
+	/// </summary>
+	bool ForgetDeletedModels()
+	{
+		var gone = ModelDeletionWatch.Gone.Take( DateTime.UtcNow );
+		if ( gone.Count == 0 ) return _modelDeleted;
+		var store = Store ?? ( WorkspaceRoot() is { } root ? new WorkspaceStore( root ) : null );
+		foreach ( var path in gone ) store?.Forget( path );
+		if ( !_modelDeleted && ModelAsset is not null && gone.Contains( AnimationWorkspace.NormalizePath( ModelAsset.Path ) ) )
+		{
+			_modelDeleted = true;
+			SetStatus( $"{ModelAsset.Name} was deleted. Its animations are kept in the workspace folder, but a new model at that path will start with none.", UI.Tone.Amber );
+		}
+		return _modelDeleted;
+	}
+	bool _modelDeleted;
+
 	/// <summary>Writes pending workspace changes now.</summary>
 	public void FlushSave()
 	{
 		_saveScheduled = false;
-		if ( Workspace is null || Store is null || Rig is null ) return;
+		if ( ForgetDeletedModels() || Workspace is null || Store is null || Rig is null ) return;
 		try
 		{
 			var dirty = Workspace.Clips.Where( c => _dirtyClips.Contains( c.Id ) ).ToList();
