@@ -83,6 +83,7 @@ public class NamingAgreementTests
         // UniMate's own label table, built without the skeletons scored here: what a rig it hasn't seen gets
         var heldOut = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "upstream_names", "name_table_heldout.json")));
         UniMateNameTable.Use(heldOut);
+        UniMateNameTable.NoRigFaces(); // the per-rig facing table holds these very rigs
         var all = Load();
         var problems = new List<string>();
         foreach (var ds in new[] { "truebones", "objaverse" })

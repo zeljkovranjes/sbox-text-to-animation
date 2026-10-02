@@ -206,6 +206,9 @@ public sealed class UniMateRig
 					names = corrected;
 					(faceRight, faceLeft, bodyAxis, _) = UniMateNames.ResolveFaceJoints( corrected, prep.RawNames );
 				}
+				// one of UniMate's own rigs (the same joints): the facing UniMate gave it
+				if ( UniMateNameTable.RigFacing( prep.RawNames ) is { } rigFace )
+					(faceRight, faceLeft, bodyAxis) = rigFace;
 			}
 			if ( alignVocabulary )
 			{

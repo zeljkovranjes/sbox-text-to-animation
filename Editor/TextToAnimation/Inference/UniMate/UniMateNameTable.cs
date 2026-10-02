@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace TextToAnimation.Editor.Inference.UniMate;
@@ -31,6 +32,45 @@ public static partial class UniMateNameTable
 			}
 			return _table = table;
 		}
+	}
+
+	static Dictionary<string, (string Right, string Left, bool BodyAxis)> _rigFaces;
+
+	/// <summary>Turns the per-rig facing off (tests scoring the rules on rigs the table contains).</summary>
+	public static void NoRigFaces() => _rigFaces = new Dictionary<string, (string, string, bool)>();
+
+	static Dictionary<string, (string Right, string Left, bool BodyAxis)> RigFaces
+	{
+		get
+		{
+			if ( _rigFaces is not null ) return _rigFaces;
+			var faces = new Dictionary<string, (string, string, bool)>( StringComparer.Ordinal );
+			foreach ( var line in RigFaceEntries.Split( '\n' ) )
+			{
+				var parts = line.Split( '\t' );
+				if ( parts.Length == 4 ) faces[parts[0]] = (parts[1], parts[2], parts[3] == "1");
+			}
+			return _rigFaces = faces;
+		}
+	}
+
+	/// <summary>
+	/// When the prepared rig is one of UniMate's own (the same set of joint names), the facing UniMate gave it, as
+	/// indices into <paramref name="raw"/> (-1, -1 = none); null for a rig UniMate doesn't have.
+	/// </summary>
+	public static (int Right, int Left, bool BodyAxis)? RigFacing( IReadOnlyList<string> raw )
+	{
+		// the engine's form of each name (its compiler turns symbols other than '_' into '_'); the rig is identified by
+		// them with index suffixes stripped, its facing joints by their full names
+		var engine = raw.Select( name => string.Concat( (name ?? "").Select( c => char.IsLetterOrDigit( c ) || c == '_' ? c : '_' ) ) ).ToList();
+		var keys = engine.Select( name => IndexSuffix.Replace( name, "" ) ).ToList();
+		var joined = string.Join( "\n", new SortedSet<string>( keys, StringComparer.Ordinal ) );
+		var hash = System.Security.Cryptography.SHA1.HashData( System.Text.Encoding.UTF8.GetBytes( joined ) );
+		var signature = Convert.ToHexString( hash ).ToLowerInvariant()[..16];
+		if ( !RigFaces.TryGetValue( signature, out var face ) ) return null;
+		if ( face.Right.Length == 0 || face.Left.Length == 0 ) return (-1, -1, false);
+		int r = engine.IndexOf( face.Right ), l = engine.IndexOf( face.Left );
+		return r >= 0 && l >= 0 ? (r, l, face.BodyAxis) : null;
 	}
 
 	static readonly Regex IndexSuffix = new( @"(_\d+)+$", RegexOptions.Compiled );
