@@ -12,43 +12,39 @@ namespace TextToAnimation.Tests;
 
 public class UniMatePromptTests
 {
+    // the prompt as written, as upstream (sample.py: prompt.strip()), however it is worded
     [Theory]
-    [InlineData("Walk cautiously forward", "An object walks cautiously forward.")]
-    [InlineData("a person jumps", "An object jumps.")]
-    [InlineData("crouch", "An object crouches.")]
-    [InlineData("slowly wave hello", "An object slowly waves hello.")]
-    [InlineData("An object runs.", "An object runs.")]
-    [InlineData("cry", "An object cries.")]
-    [InlineData("a bipedal punches forward", "An object punches forward.")]
-    [InlineData("A dangerous robot in armor swings its arm", "An object swings its arm.")]
-    [InlineData("my character kicks with the right leg", "An object kicks with the right leg.")]
-    [InlineData("a person punch forward", "An object punches forward.")]
-    [InlineData("the boss walks", "An object walks.")]
-    [InlineData("a human punch forward", "An object punches forward.")]
-    [InlineData("A human does a front flip.", "An object does a front flip.")]
-    [InlineData("a cool robot jump over a box", "An object jumps over a box.")]
-    [InlineData("my knight swing a sword", "An object swings a sword.")]
-    [InlineData("a duck walks", "An object walks.")]
-    [InlineData("a person back flips", "An object back flips.")]
-    [InlineData("a tired man slowly walk home", "An object slowly walks home.")]
-    public void Captions(string input, string expected) => Assert.Equal(expected, UniMatePrompt.ToCaption(input));
+    [InlineData("  a person runs and then performs a front flip  ", "a person runs and then performs a front flip")]
+    [InlineData("Walk cautiously forward, look behind, then run.", "Walk cautiously forward, look behind, then run.")]
+    [InlineData("a tired man slowly walk home", "a tired man slowly walk home")]
+    [InlineData("An object runs, jumps, rolls, and then stands up.", "An object runs, jumps, rolls, and then stands up.")]
+    public void Captions(string input, string expected) => Assert.Equal(expected, UniMatePrompt.Caption(input));
+
+    /// <summary>Caption strips exactly what Python's str.strip() does (its str.isspace set over the whole BMP).</summary>
+    [Fact]
+    public void StripsLikePython()
+    {
+        var python = new[] { 0x9, 0xa, 0xb, 0xc, 0xd, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x85, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
+            0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000 };
+        var stripped = Enumerable.Range(0, 0x10000).Where(c => c is < 0xd800 or > 0xdfff && UniMatePrompt.Caption($"{(char)c}x{(char)c}") == "x").ToArray();
+        Assert.Equal(python, stripped);
+    }
 
     [Theory]
-    [InlineData("A human does a front flip.", "Does a front flip")]
+    [InlineData("A human does a front flip.", "A human does a front flip")]
     [InlineData("walk forward", "Walk forward")]
-    [InlineData("Walk cautiously forward, look behind, then run.", "Walk cautiously forward")]
-    [InlineData("a human punch forward", "Punches forward")]
-    [InlineData("An object flaps its wings and rises.", "Flaps its wings and rises")]
+    [InlineData("Walk cautiously forward, look behind, then run.", "Walk cautiously forward, look behind, then run")]
     [InlineData("crouch down low and sneak slowly past the sleeping guard without making noise", "Crouch down low and sneak slowly past the")]
     [InlineData("", "Generated")]
+    [InlineData("   \n\t ", "Generated")]
+    [InlineData("jump\nthen   land\r\n", "Jump then land")]
+    [InlineData("🕺 dance", "🕺 dance")]
+    [InlineData("An object walks forward.", "Walks forward")]
+    [InlineData("an  OBJECT runs, jumps, rolls, and then stands up.", "Runs, jumps, rolls, and then stands up")]
+    [InlineData("An object", "An object")]
+    [InlineData("An objective look", "An objective look")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa🕺🕺", "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
     public void ClipNames(string prompt, string expected) => Assert.Equal(expected, UniMatePrompt.ClipName(prompt));
-
-    [Fact]
-    public void SplitsSequentialPrompts()
-    {
-        Assert.Equal(new[] { "Walk cautiously forward", "look behind", "run" }, UniMatePrompt.SplitSteps("Walk cautiously forward, look behind, then run."));
-        Assert.Single(UniMatePrompt.SplitSteps("A person waves while walking forward"));
-    }
 }
 
 public class UniMateGeneratorTests

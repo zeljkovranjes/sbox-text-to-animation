@@ -31,6 +31,30 @@ public class T5Tests
         Assert.Equal(new[] { 389, 3735, 10681, 1039, 5, 1 }, tok.Encode("An object walks forward.").ToArray());
     }
 
+    /// <summary>
+    /// Whatever a user types reaches FLAN-T5 as the same ids upstream's tokenizer gives: every UniML3D caption plus
+    /// user-style and adversarial text (fixtures/upstream_text, dev/tools/upstream_prep/make_tokenizer_fixture.py).
+    /// </summary>
+    [Fact]
+    public void TokenizerMatchesUpstreamOnAnyText()
+    {
+        if (!File.Exists(TokenizerPath)) return;
+        var tok = T5Tokenizer.Load(TokenizerPath);
+        var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "upstream_text", "t5_token_ids.json"))).RootElement;
+        int total = 0, wrong = 0;
+        foreach (var c in fixture.GetProperty("cases").EnumerateArray())
+        {
+            var text = c[0].GetString();
+            var expected = c[1].EnumerateArray().Select(e => e.GetInt32()).ToArray();
+            var actual = tok.Encode(text).ToArray();
+            total++;
+            if (expected.SequenceEqual(actual)) continue;
+            if (++wrong <= 20) _out.WriteLine($"{JsonSerializer.Serialize(text)}: upstream [{string.Join(",", expected)}] port [{string.Join(",", actual)}]");
+        }
+        _out.WriteLine($"{total - wrong}/{total} identical ({fixture.GetProperty("tokenizer").GetString()})");
+        Assert.Equal(0, wrong);
+    }
+
     [Fact]
     public void EncoderPooledEmbeddingsMatchReference()
     {

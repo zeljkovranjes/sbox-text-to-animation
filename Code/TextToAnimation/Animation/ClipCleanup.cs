@@ -48,6 +48,8 @@ public static class ClipCleanup
         // a generated foot is "planted" when it moves much slower than the body (never perfectly still)
         options.SpeedThresholdCmPerSec = MathF.Max(options.SpeedThresholdCmPerSec, 0.6f * bodySpeed);
         options.HeightThresholdCm *= 2.5f;
+        // generated motion keeps every bone's length: a plant the leg can't reach stays where the leg ends
+        options.MaxStretch = 0f;
         var report = FootPlant.Apply(frames, rig.Skeleton, rig.LeftFoot, rig.RightFoot, rig.Up, fps, options);
         var plants = report.Left.Plants.Count + report.Right.Plants.Count;
         return plants > 0 ? $"Smoothed; {plants} foot plants locked." : "Smoothed.";

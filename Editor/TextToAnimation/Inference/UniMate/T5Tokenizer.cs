@@ -8,8 +8,8 @@ using System.Text.Json;
 namespace TextToAnimation.Editor.Inference.UniMate;
 
 /// <summary>
-/// SentencePiece-unigram tokenizer for flan-t5, read from the Hugging Face <c>tokenizer.json</c>: NFKC
-/// normalisation, whitespace collapsing, Metaspace pre-tokenisation ("▁" word prefix, split per word),
+/// SentencePiece-unigram tokenizer for flan-t5, read from the Hugging Face <c>tokenizer.json</c>: its precompiled
+/// charsmap normalisation, whitespace split and Metaspace pre-tokenisation ("▁" word prefix),
 /// Viterbi segmentation by piece log-probability, then <c>&lt;/s&gt;</c> appended.
 /// </summary>
 public sealed class T5Tokenizer
@@ -44,36 +44,51 @@ public sealed class T5Tokenizer
 		VocabSize = id;
 		_maxPieceLength = _pieces.Keys.Max( k => k.Length );
 		_unkScore = min - 10.0;
+		_charsMap = PrecompiledCharsMap.FromTokenizer( doc.RootElement );
 	}
+
+	readonly PrecompiledCharsMap _charsMap;
 
 	public static T5Tokenizer Load( string path ) => new( File.ReadAllText( path ) );
 
-	/// <summary>Token ids for a text, ending with &lt;/s&gt;.</summary>
+	/// <summary>
+	/// Token ids for a text, ending with &lt;/s&gt;, as transformers' T5Tokenizer gives them: the normalizer, then its
+	/// pre-tokenizers WhitespaceSplit (words between Unicode whitespace) and Metaspace (each word prefixed with "▁"
+	/// unless it starts with one, and split before every "▁"), then each piece segmented.
+	/// </summary>
 	public List<int> Encode( string text )
 	{
 		var ids = new List<int>();
 		var normalized = Normalize( text );
-		if ( normalized.Length > 0 )
+		var start = -1;
+		for ( var i = 0; i <= normalized.Length; i++ )
 		{
-			foreach ( var word in normalized.Split( ' ', StringSplitOptions.RemoveEmptyEntries ) )
-				Segment( Space + word, ids );
+			if ( i < normalized.Length && !char.IsWhiteSpace( normalized[i] ) )
+			{
+				if ( start < 0 ) start = i;
+				continue;
+			}
+			if ( start >= 0 ) Metaspace( normalized[start..i], ids );
+			start = -1;
 		}
 		ids.Add( EosId );
 		return ids;
 	}
 
-	static string Normalize( string text )
+	void Metaspace( string word, List<int> ids )
 	{
-		var s = (text ?? "").Normalize( NormalizationForm.FormKC );
-		var sb = new StringBuilder( s.Length );
-		foreach ( var ch in s )
+		if ( word[0] != Space ) word = Space + word;
+		var from = 0;
+		for ( var i = 1; i <= word.Length; i++ )
 		{
-			if ( char.IsControl( ch ) && ch != '\t' && ch != '\n' ) continue;
-			sb.Append( char.IsWhiteSpace( ch ) ? ' ' : ch );
+			if ( i < word.Length && word[i] != Space ) continue;
+			Segment( word[from..i], ids );
+			from = i;
 		}
-		var collapsed = System.Text.RegularExpressions.Regex.Replace( sb.ToString(), " {2,}", " " );
-		return collapsed.Trim();
 	}
+
+	/// <summary>tokenizer.json's normalizer: the SentencePiece precompiled charsmap (its space collapsing is moot once words are split on whitespace).</summary>
+	string Normalize( string text ) => _charsMap is null ? (text ?? "").Normalize( NormalizationForm.FormKC ) : _charsMap.Normalize( text ?? "" );
 
 	/// <summary>Viterbi: best-scoring segmentation of one word into vocabulary pieces.</summary>
 	void Segment( string word, List<int> ids )

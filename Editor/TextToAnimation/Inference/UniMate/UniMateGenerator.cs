@@ -94,14 +94,15 @@ public sealed class UniMateGenerator : IMotionGenerator
 				case GenerationMode.TextToMotion:
 				case GenerationMode.Expansion:
 				{
+					// one prompt, one caption, as upstream (sample.py encodes the prompt whole; segments only come from a
+					// list of prompts, motion expansion): its captions say "runs, flips, and then lands" in one sentence
 					var segments = request.Prompts.Where( p => !string.IsNullOrWhiteSpace( p ) ).ToList();
-					if ( request.Mode == GenerationMode.TextToMotion && segments.Count == 1 ) segments = UniMatePrompt.SplitSteps( segments[0] );
 					if ( segments.Count == 0 ) throw new InvalidOperationException( "Describe the motion first." );
 					// a single prompt longer than one window repeats as continuing segments
 					var wanted = request.DurationSeconds > 0 ? request.DurationSeconds : Capabilities.DefaultSeconds;
 					while ( segments.Count * (Window - Overlap) + Overlap < wanted * UniMateModel.Fps && segments.Count < 20 )
 						segments.Add( segments[^1] );
-					frames = TextChain( uniRig, prep, segments.Select( UniMatePrompt.ToCaption ).ToList(), seed, steps, guidance, Report, token );
+					frames = TextChain( uniRig, prep, segments.Select( UniMatePrompt.Caption ).ToList(), seed, steps, guidance, Report, token );
 					if ( request.Mode == GenerationMode.TextToMotion && wanted > 0 )
 					{
 						var keep = Math.Clamp( (int)MathF.Round( wanted * UniMateModel.Fps ) + 1, 2, frames.Count );
@@ -113,14 +114,14 @@ public sealed class UniMateGenerator : IMotionGenerator
 				{
 					if ( source is null ) throw new InvalidOperationException( "In-betweening needs an animation with pinned frames." );
 					if ( pins.Count < 2 ) throw new InvalidOperationException( "Pin at least two frames (the poses to keep) on the timeline." );
-					var caption = UniMatePrompt.ToCaption( request.Prompts.FirstOrDefault() ?? "" );
+					var caption = UniMatePrompt.Caption( request.Prompts.FirstOrDefault() ?? "" );
 					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, pins, null, 0f, Report, token, caption );
 					break;
 				}
 				case GenerationMode.TextEdit:
 				{
 					if ( source is null ) throw new InvalidOperationException( "Editing needs an existing animation." );
-					var caption = UniMatePrompt.ToCaption( request.Prompts.FirstOrDefault() ?? "" );
+					var caption = UniMatePrompt.Caption( request.Prompts.FirstOrDefault() ?? "" );
 					if ( caption.Length == 0 ) throw new InvalidOperationException( "Describe the new motion for the unlocked bones." );
 					var keepJoints = uniRig.JointsForBones( request.KeepBones );
 					if ( keepJoints.Count == 0 ) notes.Add( "No bones were locked, so the whole body was regenerated." );
@@ -130,7 +131,7 @@ public sealed class UniMateGenerator : IMotionGenerator
 				case GenerationMode.Variation:
 				{
 					if ( source is null ) throw new InvalidOperationException( "Variations need an existing animation." );
-					var caption = UniMatePrompt.ToCaption( request.Prompts.FirstOrDefault() ?? "An object moves." );
+					var caption = UniMatePrompt.Caption( request.Prompts.FirstOrDefault() ?? "An object moves." );
 					// start part-way along the flow from a noised copy of the source (SDEdit): low strength stays close
 					var t0 = Math.Clamp( 1f - request.VariationStrength, 0.05f, 0.9f );
 					frames = Chain( uniRig, prep, null, seed, steps, guidance, source, null, null, t0, Report, token, caption );

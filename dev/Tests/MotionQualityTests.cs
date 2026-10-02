@@ -53,7 +53,8 @@ public class MotionQualityTests
         if (!UniMateSamplerTests.Available) return;
         var rig = Fixtures.HumanRig();
         var generator = new UniMateGenerator(UniMateSamplerTests.Model());
-        GenerationRequest Request(bool clean) => new() { Mode = GenerationMode.TextToMotion, Prompts = new[] { "walk forward" }, DurationSeconds = 2f, OutputFps = 30f, Seed = 3, Steps = 12, CleanUp = clean };
+        // the prompt goes to UniMate as written (as upstream), so it is worded as UniMate's training captions are
+        GenerationRequest Request(bool clean) => new() { Mode = GenerationMode.TextToMotion, Prompts = new[] { "An object walks forward." }, DurationSeconds = 2f, OutputFps = 30f, Seed = 3, Steps = 12, CleanUp = clean };
         var raw = (await generator.GenerateAsync(rig, Request(false), null, default)).Single();
         var clean = (await generator.GenerateAsync(rig, Request(true), null, default)).Single();
         var r = Measure(rig, raw.Frames, 30f); var c = Measure(rig, clean.Frames, 30f);
