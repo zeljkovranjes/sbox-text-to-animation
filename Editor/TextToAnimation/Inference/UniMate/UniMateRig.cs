@@ -198,6 +198,9 @@ public sealed class UniMateRig
 				where[rig.Analysis.BodyRoot] = new UniMateNaming.Place( null, 0, 1, true );
 				var corrected = UniMateNaming.Correct( prep.RawNames, names, prep.Parents,
 					prep.Kept.Select( b => where.TryGetValue( b, out var w ) ? w : (UniMateNaming.Place?)null ).ToList(), objectType );
+				// a raw name UniMate's own data labelled: exactly that label
+				for ( var i = 0; i < corrected.Length; i++ )
+					if ( UniMateNameTable.Lookup( prep.RawNames[i] ) is { } known ) corrected[i] = known;
 				if ( !corrected.SequenceEqual( names ) )
 				{
 					names = corrected;
@@ -212,6 +215,14 @@ public sealed class UniMateRig
 					names = aligned;
 					(faceRight, faceLeft, bodyAxis, _) = UniMateNames.ResolveFaceJoints( aligned, prep.RawNames );
 				}
+			}
+			// a facing pair sitting on one point (or one above the other) defines no direction: the rule stage's pair,
+			// else none, instead of a skeleton that can't be put in UniMate's frame
+			bool Degenerate( int r, int l ) => r >= 0 && l >= 0 && !bodyAxis && Vector3.Cross( rest[prep.Kept[r]].Pos - rest[prep.Kept[l]].Pos, rig.Up ).LengthSquared() < 1e-10f;
+			if ( Degenerate( faceRight, faceLeft ) )
+			{
+				(faceRight, faceLeft, bodyAxis) = (prep.FaceRight, prep.FaceLeft, prep.BodyAxis);
+				if ( Degenerate( faceRight, faceLeft ) ) (faceRight, faceLeft, bodyAxis) = (-1, -1, false);
 			}
 			skeleton = UniMateSkeleton.Build( names, prep.Parents, prep.Kept.Select( b => rest[b].Pos ).ToList(),
 				prep.Kept.Select( b => rest[b].Rot ).ToList(), faceRight, faceLeft, null,

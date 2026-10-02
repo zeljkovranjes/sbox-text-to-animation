@@ -80,7 +80,11 @@ public class NamingAgreementTests
     [Fact]
     public void NamesAgreeWithUniMatesData()
     {
+        // UniMate's own label table, built without the skeletons scored here: what a rig it hasn't seen gets
+        var heldOut = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "upstream_names", "name_table_heldout.json")));
+        UniMateNameTable.Use(heldOut);
         var all = Load();
+        var problems = new List<string>();
         foreach (var ds in new[] { "truebones", "objaverse" })
         {
             int same = 0, total = 0, faces = 0, n = 0, errors = 0, left = 0;
@@ -94,10 +98,11 @@ public class NamingAgreementTests
             _out.WriteLine($"{ds}: {n} skeletons, joint names agree {100.0 * same / total:0.0}% ({same}/{total}), facing agrees on {faces}/{n}, {errors} failed; {left} joints of people left to the engine by design");
             foreach (var (k, rate, diffs) in worst.OrderBy(w => w.Item2).Take(6))
                 _out.WriteLine($"   {k}: {rate * 100:0}%  e.g. {string.Join("; ", diffs.Take(4))}");
-            // measured 2026-10-02: 95.9% / 90.1%, facing 65 / 184 (rule stage alone: 91.1% / 87.0%, facing 65 / 178)
-            var (minNames, minFaces) = ds == "truebones" ? (0.958, 65) : (0.901, 184);
-            Assert.True((double)same / total >= minNames, $"{ds}: names agree on only {100.0 * same / total:0.0}%");
-            Assert.True(faces >= minFaces, $"{ds}: facing agrees on only {faces}/{n}");
+            // measured 2026-10-02 with the held-out table: 96.4% / 91.3%, facing 65 / 184 (rule stage alone: 91.1% / 87.0%, facing 65 / 178)
+            var (minNames, minFaces) = ds == "truebones" ? (0.963, 65) : (0.912, 184);
+            if ((double)same / total < minNames) problems.Add($"{ds}: names agree on only {100.0 * same / total:0.0}%");
+            if (faces < minFaces) problems.Add($"{ds}: facing agrees on only {faces}/{n}");
         }
+        Assert.True(problems.Count == 0, string.Join("; ", problems));
     }
 }
