@@ -159,7 +159,9 @@ public sealed class EditorSession
 		var text = vmdl is not null ? EngineThread.Try( () => File.ReadAllText( vmdl ) ) : null;
 		// skin weights from the model's source FBX: UniMate's skeleton preparation prunes on them
 		var weights = text is null ? null : EngineThread.Try( () => FbxSkin.ForVmdl( text, rel => VmdlSources.Resolve( rel, vmdl ) ) );
-		Inference.UniMate.UniMateSkin.Attach( skeleton, weights, asset.Name );
+		// bones the model's own constraints drive: the engine poses them, so generation leaves them to it
+		var driven = text is null ? null : EngineThread.Try( () => VmdlSources.ConstraintDrivenBones( text, vmdl ) );
+		Inference.UniMate.UniMateSkin.Attach( skeleton, weights, asset.Name, driven );
 
 		LoadWarnings.Clear();
 		AnimationWorkspace ws;

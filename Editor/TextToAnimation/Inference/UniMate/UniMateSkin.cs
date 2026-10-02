@@ -16,17 +16,24 @@ public static class UniMateSkin
 	{
 		public IReadOnlyDictionary<string, (double Max, double Sum)> Weights;
 		public string ObjectType;
+		public IReadOnlySet<string> Driven;
 	}
 
 	static readonly ConditionalWeakTable<Skeleton, Entry> _entries = new();
 
 	/// <summary>Attaches per-bone (largest single, total) skin weights, and the model's name (upstream's object type).</summary>
-	public static void Attach( Skeleton skeleton, IReadOnlyDictionary<string, (double Max, double Sum)> weights, string objectType )
+	/// <param name="driven">Bones the model's own constraints drive at runtime (the engine poses them, not clips).</param>
+	public static void Attach( Skeleton skeleton, IReadOnlyDictionary<string, (double Max, double Sum)> weights, string objectType,
+		IReadOnlySet<string> driven = null )
 	{
 		if ( skeleton is null ) return;
 		_entries.Remove( skeleton );
-		_entries.Add( skeleton, new Entry { Weights = weights, ObjectType = objectType ?? "" } );
+		_entries.Add( skeleton, new Entry { Weights = weights, ObjectType = objectType ?? "", Driven = driven } );
 	}
+
+	/// <summary>The bones the model's constraints drive (empty when unknown).</summary>
+	public static IReadOnlySet<string> DrivenOf( Skeleton skeleton )
+		=> skeleton is not null && _entries.TryGetValue( skeleton, out var e ) && e.Driven is not null ? e.Driven : new HashSet<string>();
 
 	/// <summary>The weights attached to <paramref name="skeleton"/>, or null when unknown.</summary>
 	public static IReadOnlyDictionary<string, (double Max, double Sum)> WeightsOf( Skeleton skeleton )

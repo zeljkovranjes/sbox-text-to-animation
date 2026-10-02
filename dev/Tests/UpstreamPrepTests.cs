@@ -243,7 +243,7 @@ public class UpstreamPrepTests
 		var (motionRig, index) = EngineRig( rig );
 		// stage fixtures check the port's arithmetic under one fixed statistics set (Objaverse, on both sides); "as
 		// shipped" fixtures let the port choose (the editor's statistics) and sample with upstream's dopri5
-		var uni = asShipped ? UniMateRig.Build( motionRig ) : UniMateRig.Build( motionRig, TextToAnimation.Generation.RigFamily.Object );
+		var uni = asShipped ? UniMateRig.Build( motionRig, alignVocabulary: false, skipHelpers: false ) : UniMateRig.Build( motionRig, TextToAnimation.Generation.RigFamily.Object, alignVocabulary: false, skipHelpers: false );
 		var z = new UniMateCoreTests.Npz( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep", $"sample_{rig}.npz" ) );
 		var srcRaw = z["src_bone"].Values.Select( v => (int)v ).ToArray();
 		var J = uni.Count;
@@ -311,7 +311,7 @@ public class UpstreamPrepTests
 	public void DecodingAndFkMatchUpstream( string rig )
 	{
 		var (motionRig, index) = EngineRig( rig );
-		var uni = UniMateRig.Build( motionRig );
+		var uni = UniMateRig.Build( motionRig, alignVocabulary: false, skipHelpers: false );
 		using var z = new UniMateCoreTests.Npz( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep", $"sample_{rig}.npz" ) );
 		var srcRaw = z["src_bone"].Values.Select( v => (int)v ).ToArray();
 		var J = uni.Count;

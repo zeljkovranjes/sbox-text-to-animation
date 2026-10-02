@@ -19,10 +19,15 @@ public class UniMateRigTests
         // two root trees (pelvis and the IK helpers under root_IK): upstream prune_secondary_roots keeps the larger one
         int RootOf(int b) { while (rig.Skeleton[b].ParentIndex >= 0) b = rig.Skeleton[b].ParentIndex; return b; }
         var main = Enumerable.Range(0, rig.Skeleton.Count).GroupBy(RootOf).OrderByDescending(g => g.Count()).First();
-        Assert.Equal(main.Count(), u.Count);
         Assert.All(u.Bone, b => Assert.Equal(main.Key, RootOf(b)));
+        // the body is animated; fingers (absent from Mixamo, whose statistics a person gets) and procedural helper
+        // bones (twist, helper, IK, clothing) are left to follow
+        var names = u.Bone.Select(b => rig.Skeleton[b].Name).ToHashSet();
+        Assert.Subset(names, new HashSet<string> { "pelvis", "spine_0", "head", "arm_upper_L", "arm_lower_R", "hand_L", "leg_upper_R", "leg_lower_L", "ankle_R" });
+        Assert.DoesNotContain(names, n => n.Contains("finger") || n.Contains("twist") || n.Contains("helper"));
         Assert.All(u.Bone, b => Assert.True(b >= 0));
-        for (var j = 0; j < u.Count; j++) Assert.Equal(UniMateNames.Clean(rig.Skeleton[u.Bone[j]].Name, ""), u.Skeleton.CleanNames[j]);
+        for (var j = 0; j < u.Count; j++) Assert.Equal(UniMateVocabulary.Align(UniMateNames.Clean(rig.Skeleton[u.Bone[j]].Name, "")), u.Skeleton.CleanNames[j]);
+        Assert.Equal("Hips", u.Skeleton.CleanNames[0]);
         Assert.True(u.Skeleton.RightHip >= 0 && u.Skeleton.LeftHip >= 0);
     }
 

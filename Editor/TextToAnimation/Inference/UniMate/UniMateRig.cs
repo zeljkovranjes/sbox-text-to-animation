@@ -74,6 +74,12 @@ public sealed class UniMateRig
 	/// network's output is only right in that space (a person under the Objaverse statistics never touches the
 	/// ground). A new rig gets the dataset its body resembles.
 	/// </summary>
+	/// <summary>Words upstream's name rule gives procedural helper bones (twist / helper / IK targets / cloth).</summary>
+	static readonly HashSet<string> HelperWords = new( StringComparer.Ordinal ) { "Twist", "Helper", "Ikrule", "Target", "Clothing", "IK" };
+
+	/// <summary>Words upstream's name rule gives finger bones.</summary>
+	static readonly HashSet<string> FingerWords = new( StringComparer.Ordinal ) { "Finger", "Thumb" };
+
 	static readonly string[] CreatureWords = { "thigh", "shin", "calf", "leg", "foot", "toe", "paw", "hoof", "wing", "tail" };
 
 	public static RigFamily DetectFamily( MotionRig rig )
@@ -99,32 +105,67 @@ public sealed class UniMateRig
 	/// Prepares a rig like upstream prepares its training rigs: pruning helpers by skin weight, clean names and
 	/// facing joints by upstream's rules, canonical T-pose and topology (see <see cref="UniMatePrep"/>).
 	/// </summary>
-	public static UniMateRig Build( MotionRig rig, RigFamily family = RigFamily.Auto )
+	/// <param name="alignVocabulary">
+	/// Rewrite joint names upstream's rule leaves outside UniMate's training vocabulary into it (and pick the facing
+	/// pair on the aligned names) - see <see cref="UniMateVocabulary"/>. Off reproduces upstream exactly (tests).
+	/// </param>
+	/// <param name="skipHelpers">
+	/// Leave procedural helper bones out of what UniMate animates (they keep following their limbs): bones the
+	/// model's constraints drive, and bones upstream's name rule calls twist / helper / IK / clothing bones. UniMate
+	/// never trained on them; on the s&amp;box human they leave the shins kicking up (lowest shin angle 3 deg below
+	/// horizontal against UniMate's 36). Off reproduces upstream's preparation exactly (tests).
+	/// </param>
+	public static UniMateRig Build( MotionRig rig, RigFamily family = RigFamily.Auto, bool alignVocabulary = true, bool skipHelpers = true )
 	{
 		var s = rig.Skeleton;
 		var rest = s.RestWorld;
 		var weights = UniMateSkin.WeightsOf( s );
-		(double Max, double Sum) W( int b ) => weights is not null && weights.TryGetValue( s[b].Name, out var w ) ? w : (0, 0);
+		var objectType = UniMateSkin.ObjectTypeOf( s );
+		var driven = UniMateSkin.DrivenOf( s );
+		if ( family == RigFamily.Auto ) family = DetectFamily( rig );
+		// under the people statistics (Mixamo: 22 joints, no fingers) finger chains are as foreign as helpers
+		var skipFingers = skipHelpers && family == RigFamily.Humanoid;
+		bool Helper( int b )
+		{
+			if ( !skipHelpers ) return false;
+			if ( driven.Contains( s[b].Name ) ) return true;
+			var words = UniMateNames.Clean( s[b].Name, objectType ).Split( ' ' );
+			return words.Any( HelperWords.Contains ) || (skipFingers && words.Any( FingerWords.Contains ));
+		}
+		(double Max, double Sum) W( int b ) => Helper( b ) ? (0, 0)
+			: weights is null ? (1, 1) : weights.TryGetValue( s[b].Name, out var w ) ? w : (0, 0);
+		var useSkin = weights is not null || Enumerable.Range( 0, s.Count ).Any( Helper );
 		var prep = UniMatePrep.Prepare( new UniMatePrep.Input
 		{
-			ObjectType = UniMateSkin.ObjectTypeOf( s ),
+			ObjectType = objectType,
 			Names = Enumerable.Range( 0, s.Count ).Select( b => s[b].Name ).ToList(),
 			Parents = Enumerable.Range( 0, s.Count ).Select( b => s[b].ParentIndex ).ToList(),
 			RestWorldPos = Enumerable.Range( 0, s.Count ).Select( b => rest[b].Pos ).ToList(),
-			SkinMax = weights is null ? null : Enumerable.Range( 0, s.Count ).Select( b => W( b ).Max ).ToList(),
-			SkinSum = weights is null ? null : Enumerable.Range( 0, s.Count ).Select( b => W( b ).Sum ).ToList(),
+			SkinMax = !useSkin ? null : Enumerable.Range( 0, s.Count ).Select( b => W( b ).Max ).ToList(),
+			SkinSum = !useSkin ? null : Enumerable.Range( 0, s.Count ).Select( b => W( b ).Sum ).ToList(),
 		} );
 		if ( prep.Kept.Length < MinJoints )
 			throw new InvalidOperationException( $"Only {prep.Kept.Length} bones of this skeleton deform the mesh; UniMate was trained on skeletons with at least {MinJoints}." );
 		UniMateSkeleton skeleton;
 		try
 		{
-			skeleton = UniMateSkeleton.Build( prep.CleanNames, prep.Parents, prep.Kept.Select( b => rest[b].Pos ).ToList(),
-				prep.Kept.Select( b => rest[b].Rot ).ToList(), prep.FaceRight, prep.FaceLeft, null,
-				UniMateSkeleton.EngineCanonicalBasis, bodyAxis: prep.BodyAxis );
+			var names = prep.CleanNames;
+			int faceRight = prep.FaceRight, faceLeft = prep.FaceLeft;
+			var bodyAxis = prep.BodyAxis;
+			if ( alignVocabulary )
+			{
+				var aligned = names.Select( UniMateVocabulary.Align ).ToArray();
+				if ( !aligned.SequenceEqual( names ) )
+				{
+					names = aligned;
+					(faceRight, faceLeft, bodyAxis, _) = UniMateNames.ResolveFaceJoints( aligned, prep.RawNames );
+				}
+			}
+			skeleton = UniMateSkeleton.Build( names, prep.Parents, prep.Kept.Select( b => rest[b].Pos ).ToList(),
+				prep.Kept.Select( b => rest[b].Rot ).ToList(), faceRight, faceLeft, null,
+				UniMateSkeleton.EngineCanonicalBasis, bodyAxis: bodyAxis );
 		}
 		catch ( ArgumentException e ) { throw new InvalidOperationException( e.Message, e ); }
-		if ( family == RigFamily.Auto ) family = DetectFamily( rig );
 		var bone = skeleton.SourceIndex.Select( i => prep.Kept[i] ).ToArray();
 		return new UniMateRig( rig, skeleton, bone, new Vector3[bone.Length], family ) { Prep = prep };
 	}
