@@ -111,7 +111,8 @@ for dataset, object_type, prompt in CASES:
     pos = recover_unimate_joint_pos_from_rot(feat, parents, offsets_from_positions(tpos, parents))
 
     tag = f"{dataset}_{object_type}_{prompt.split()[2].strip('.').lower()}"[:60]
-    np.savez(os.path.join(FIX, f"ds_{tag}.npz"), noise=noise.numpy()[:, :J], caption_emb=pooled[0], x_final=x.numpy()[:, :J],
+    # noise for every slot: upstream pads to max_joints and the padded slots enter dopri5's error norm
+    np.savez(os.path.join(FIX, f"ds_{tag}.npz"), noise=noise.numpy(), caption_emb=pooled[0], x_final=x.numpy()[:, :J],
              features=feat, fk_pos=pos, tpos=tpos, tpos_global_rot=np.array(c["tpos_global_rotations"], float),
              spectral=np.array(c["spectral_feats"], float), name_emb=joint_emb,
              cond_tpos=cond["tpos_first_frame"][0, :J].numpy())

@@ -191,6 +191,7 @@ public class UpstreamPrepTests
 
 	/// <summary>Rigs with sampling fixtures (T2A_RIGS=a,b restricts them, for iterating on one).</summary>
 	public static IEnumerable<object[]> SampledRigs() => Directory.GetFiles( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep" ), "sample_*.npz" )
+		.Where( f => !f.EndsWith( "_asshipped.npz" ) )
 		.Select( f => Path.GetFileNameWithoutExtension( f )[7..] )
 		.Where( r => Environment.GetEnvironmentVariable( "T2A_RIGS" ) is not { Length: > 0 } only || only.Split( ',' ).Contains( r ) )
 		.Select( r => new object[] { r } );
@@ -237,12 +238,12 @@ public class UpstreamPrepTests
 		public PreparedSkeleton Prepared;
 	}
 
-	Chain RunChain( string rig, bool sample = true )
+	Chain RunChain( string rig, bool sample = true, bool asShipped = false )
 	{
 		var (motionRig, index) = EngineRig( rig );
-		// these fixtures check the port's arithmetic stage by stage under one fixed statistics set (Objaverse, on both
-		// sides); which statistics a rig gets is checked against upstream's own sampling in DatasetMotionTests
-		var uni = UniMateRig.Build( motionRig, TextToAnimation.Generation.RigFamily.Object );
+		// stage fixtures check the port's arithmetic under one fixed statistics set (Objaverse, on both sides); "as
+		// shipped" fixtures let the port choose (the editor's statistics) and sample with upstream's dopri5
+		var uni = asShipped ? UniMateRig.Build( motionRig ) : UniMateRig.Build( motionRig, TextToAnimation.Generation.RigFamily.Object );
 		var z = new UniMateCoreTests.Npz( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep", $"sample_{rig}.npz" ) );
 		var srcRaw = z["src_bone"].Values.Select( v => (int)v ).ToArray();
 		var J = uni.Count;
@@ -252,7 +253,7 @@ public class UpstreamPrepTests
 		for ( var b = 0; b < motionRig.Skeleton.Count; b++ ) rawOfSkeleton[b] = index[motionRig.Skeleton[b].Name];
 		var cOf = srcRaw.Select( r => Array.FindIndex( uni.Bone, b => rawOfSkeleton[b] == r ) ).ToArray();
 		Assert.DoesNotContain( -1, cOf );
-		Assert.Equal( TextToAnimation.Generation.RigFamily.Object, uni.Family );
+		if ( !asShipped ) Assert.Equal( TextToAnimation.Generation.RigFamily.Object, uni.Family );
 		var spec = z["spectral"].Values; var sp = new float[J, 8];
 		for ( var u = 0; u < J; u++ ) for ( var c = 0; c < 8; c++ ) sp[cOf[u], c] = spec[u * 8 + c];
 		uni.Skeleton.SetSpectral( sp ); // the eigenbasis inside repeated eigenvalues is LAPACK's choice: use upstream's
@@ -262,7 +263,8 @@ public class UpstreamPrepTests
 		const int T = UniMateModel.Frames;
 		var noiseUp = z["noise"].Values; var noise = new float[J * 12 * T];
 		for ( var u = 0; u < J; u++ ) Array.Copy( noiseUp, u * 12 * T, noise, cOf[u] * 12 * T, 12 * T );
-		var x = !sample ? null : model.Sample( prepared, z["caption_emb"].Values, noise, new SampleSettings { Steps = 8, Guidance = 3f }, null, default );
+		var settings = asShipped ? new SampleSettings { Method = Integrator.Dopri5, Guidance = 3f } : new SampleSettings { Steps = 8, Guidance = 3f };
+		var x = !sample ? null : model.Sample( prepared, z["caption_emb"].Values, noise, settings, null, default );
 		return new Chain { Uni = uni, COf = cOf, Z = z, X = x, Stats = stats, Prepared = prepared };
 	}
 
@@ -367,10 +369,24 @@ public class UpstreamPrepTests
 	/// </summary>
 	[Theory]
 	[MemberData( nameof( SampledRigs ) )]
-	public void ReconstructionOnTheOriginalRigMatchesUpstream( string rig )
+	public void ReconstructionOnTheOriginalRigMatchesUpstream( string rig ) => Reconstruction( rig, false );
+
+	public static IEnumerable<object[]> AsShippedRigs() => Directory.GetFiles( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep" ), "sample_*_asshipped.npz" )
+		.Select( f => new object[] { Path.GetFileNameWithoutExtension( f )["sample_".Length..] } );
+
+	/// <summary>
+	/// The editor's whole pipeline as it ships (its own statistics choice, upstream's dopri5) on the original rig,
+	/// against upstream sampling and reconstructing with the same choices (make_sample_fixtures.py, *_asshipped).
+	/// Upstream pads to 71 joint slots, which shifts its adaptive steps a little: tolerances are the solver's.
+	/// </summary>
+	[Theory]
+	[MemberData( nameof( AsShippedRigs ) )]
+	public void AsShippedMatchesUpstream( string rig ) => Reconstruction( rig, true );
+
+	void Reconstruction( string rig, bool asShipped )
 	{
 		if ( !UniMateSamplerTests.Available ) return;
-		var ch = RunChain( rig );
+		var ch = RunChain( rig, asShipped: asShipped );
 		using var z = ch.Z;
 		using var recon = new UniMateCoreTests.Npz( Path.Combine( AppContext.BaseDirectory, "fixtures", "upstream_prep", $"recon_{rig}.npz" ) );
 		var J = ch.Uni.Count; var cOf = ch.COf;
@@ -425,6 +441,12 @@ public class UpstreamPrepTests
 		}
 		_out.WriteLine( $"{rig}: {J} joints; network output {xErr:0.00000}; bone world rotations {rotErr:0.000} deg [{worstRot}]; bone world positions {posErr:0.00000} [{worstPos}] (rig size {size:0.00})" +
 			(affected.Any( a => a ) ? $"; {affected.Count( a => a )} bones under tie-ordered children {tieErr:0.00} deg" : "") );
+		if ( asShipped )
+		{
+			_out.WriteLine( $"{rig}: statistics {ch.Uni.Family}" );
+			Assert.True( rotErr < 3f, $"bone rotations differ by {rotErr} degrees" );
+			return;
+		}
 		Assert.True( xErr < 0.02f, $"network output differs by {xErr}" );
 		Assert.True( rotErr < 0.25f, $"bone rotations differ by {rotErr} degrees" );
 		Assert.True( posErr < 1e-3f * MathF.Max( size, 1f ), $"bone positions differ by {posErr}" );

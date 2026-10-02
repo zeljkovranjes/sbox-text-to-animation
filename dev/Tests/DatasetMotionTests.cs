@@ -81,6 +81,8 @@ public class DatasetMotionTests
         _out.WriteLine($"{tag}: {J} joints; statistics {uni.Family} (upstream {dataset}); {nameDiffs} clean names differ from the dataset's; facing {(faceSame ? "same" : "different")}");
 
         var model = UniMateSamplerTests.Model();
+        // upstream's noise for the skeleton's joints, in the port's order (newer fixtures also hold the padded slots
+        // upstream integrates; the port runs the real joints only)
         var noiseUp = z["noise"].Values; var noise = new float[J * 12 * T];
         for (var u = 0; u < J; u++) Array.Copy(noiseUp, u * 12 * T, noise, cOf[u] * 12 * T, 12 * T);
         var caption = z["caption_emb"].Values;

@@ -16,7 +16,9 @@ from unimate_ref import *  # noqa: E402,F401  (build_cond, euler_sample, to_engi
 from Quaternions import Quaternions  # noqa: E402
 from data_process.utils.skeleton import get_root_facing_quat  # noqa: E402
 from unimate.configs.schema import MainConfig  # noqa: E402
-from unimate.models.factory import create_model  # noqa: E402
+from unimate.models.factory import create_model, create_transport  # noqa: E402
+from unimate.models.flow.transport import Sampler  # noqa: E402
+from unimate.inference.generate import ClassifierFreeSampleModel  # noqa: E402
 from unimate.training.ema import EMAModel  # noqa: E402
 from unimate.utils.motion_utils import hml_rotations_to_bvh_quaternions, recover_unimate_root_quat_and_pos  # noqa: E402
 import types  # noqa: E402
@@ -100,6 +102,7 @@ model.load_state_dict(sd["model_state_dict"])
 ema = EMAModel(parameters=model.parameters(), decay=0.9999, use_ema_warmup=True)
 ema.load_state_dict(sd["ema_state_dict"]); ema.copy_to(model.parameters())
 model.eval()
+GEN = Sampler(create_transport(training_config=cfg.training))
 stats_all = np.load(os.path.join(CACHE, EXP, "dataset_stats.npy"), allow_pickle=True).item()
 MJ, MD, T = cfg.dataset.max_joints, cfg.dataset.max_depth, cfg.dataset.max_motion_length
 te = TextEncoder()
@@ -107,8 +110,9 @@ te = TextEncoder()
 ONLY = [r for r in os.environ.get("T2A_RIGS", "").split(",") if r]  # restrict to these rigs (others keep their files)
 for path in sorted(glob.glob(os.path.join(FIX, "prep_*.json"))):
     fx = json.load(open(path))
-    rig = fx["rig"]
-    if ONLY and rig not in ONLY:
+    tag = os.path.basename(path)[len("prep_"):-len(".json")]  # the fixture name (prep_<tag>.json)
+    rig = fx["rig"]                                           # the object type upstream's name rule sees
+    if ONLY and tag not in ONLY:
         continue
     if "degenerate" in fx:
         continue
@@ -142,7 +146,10 @@ for path in sorted(glob.glob(os.path.join(FIX, "prep_*.json"))):
     canon = dict(tpos=tpos, M=M, origin=origin, scale=scale)
 
     # ---- conditioning with upstream's own dataset functions (create_sample_condition's path)
-    family = "objaverse"  # the port's statistics for a new rig (upstream's generic asset pipeline); both sides
+    # stage fixtures: one fixed statistics set on both sides (Objaverse). "As shipped" fixtures (prep_<rig>_asshipped):
+    # the statistics the editor picks for the rig (T2A_FAMILY) and upstream's own sampler (dopri5)
+    as_shipped = tag.endswith("_asshipped")
+    family = os.environ.get("T2A_FAMILY", "objaverse") if as_shipped else "objaverse"
     stats = stats_all[family]
     mj = max(MJ, J)                                                 # the network has no per-joint weights: pad to J
     for m in model.modules():
@@ -172,7 +179,11 @@ for path in sorted(glob.glob(os.path.join(FIX, "prep_*.json"))):
     _, cond = mixture_batch_collate([batch])
 
     noise = torch.randn((1, mj, 12, T), generator=torch.Generator().manual_seed(1234))
-    x = euler_sample(model, cond, noise, cfg=CFG, steps=STEPS)
+    if as_shipped:
+        with torch.no_grad():
+            x = GEN.sample_ode()(noise, ClassifierFreeSampleModel(model, cfg_scale=CFG), cond=cond)[-1]
+    else:
+        x = euler_sample(model, cond, noise, cfg=CFG, steps=STEPS)
     feat = x[0, :J].permute(2, 0, 1).numpy() * std[None] + mean[None]
 
     # ---- upstream's own recovery: BVH rotations + root (motion_utils), FK positions, rig-driving matrices
@@ -184,7 +195,7 @@ for path in sorted(glob.glob(os.path.join(FIX, "prep_*.json"))):
     rest = Animation(Quaternions.id((1, J)), (tpos_offsets / scale_factor)[None], Quaternions.id(J), tpos_offsets / scale_factor, parents)
     L, G, root = to_engine(bvh, root_pos, canon, rest_rot, parents)
 
-    np.savez(os.path.join(FIX, f"sample_{rig}.npz"), noise=noise.numpy()[:, :J], caption_emb=pooled[0], x_final=x.numpy()[:, :J],
+    np.savez(os.path.join(FIX, f"sample_{tag}.npz"), noise=noise.numpy()[:, :J], caption_emb=pooled[0], x_final=x.numpy()[:, :J],
              features=feat, bvh_local_q=bvh, root_pos_canon=root_pos, fk_pos=fk_pos, engine_world_q=G, engine_root_pos=root,
              spectral=spec, src_bone=np.array(src),
              cond_tpos=cond["tpos_first_frame"][0, :J].numpy(), cond_tpos_parents=cond["tpos_first_frame_parents"][0, :J].numpy(),
@@ -193,4 +204,4 @@ for path in sorted(glob.glob(os.path.join(FIX, "prep_*.json"))):
              cond_name_emb=cond["joint_names_emb"][0, :J].numpy(),
              anim_local_mat=transforms_local(anim), rest_local_mat=transforms_local(rest)[0],
              tpos_global_rot=rotations_global(tpos_anim).qs[0])
-    print(f"SAMPLE {rig}: {J} joints, stats {family}")
+    print(f"SAMPLE {tag}: {J} joints, stats {family}, {'dopri5' if as_shipped else f'euler {STEPS}'}")
