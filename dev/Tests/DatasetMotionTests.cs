@@ -64,8 +64,11 @@ public class DatasetMotionTests
         var rig = TextToAnimation.Animation.MotionRig.Create(skeleton);
 
         // ---- the port decides: preparation, facing, names, statistics
-        var uni = UniMateRig.Build(rig);
+        // every joint, as upstream prepares it; the editor's preparation (which may leave helper/finger chains to the
+        // engine under the people statistics) is compared as shipped below when it keeps every joint
+        var uni = UniMateRig.Build(rig, skipHelpers: false);
         Assert.Equal(J, uni.Count);
+        var shipped = UniMateRig.Build(rig);
         var cOf = Enumerable.Range(0, J).Select(u => Array.FindIndex(uni.Bone, b => skeleton[b].Name == names[u])).ToArray();
         Assert.DoesNotContain(-1, cOf);
         var nameDiffs = Enumerable.Range(0, J).Count(u => uni.Skeleton.CleanNames[cOf[u]] != upClean[u]);
@@ -118,6 +121,9 @@ public class DatasetMotionTests
         var ownStats = UniMateStats.For(uni.Family);
         var own = Compare(ownStats, model.Prepare(uni.Skeleton, ownStats, default));
         _out.WriteLine($"  port as is: joint positions mean {own.Mean:0.0000}, max {own.Worst:0.0000}; lowest point differs by up to {own.GroundDiff:0.0000} (canonical units, body diameter 2)");
+        var keptAll = shipped.Count == J && shipped.Bone.SequenceEqual(uni.Bone);
+        if (!keptAll)
+            _out.WriteLine($"  as shipped, {J - shipped.Count} joints are left to the engine ({shipped.Family} statistics): {string.Join(", ", uni.Bone.Except(shipped.Bone).Select(b => skeleton[b].Name).Take(12))}");
 
         // the same with the dataset's own names and spectral features: what remains is arithmetic
         var spec = z["spectral"].Values; var sp = new float[J, 8];
@@ -158,6 +164,8 @@ public class DatasetMotionTests
             Assert.Equal(expected, uni.Family);
         // the dataset's curated joint names differ from what upstream's own name rule (the port's) makes of a new rig;
         // with the same names and facing, the port's motion must stand where UniMate's does
+        // the editor's own preparation leaves nothing out of UniMate's own animals; people may lose helper chains
+        if (dataset == "truebones") Assert.True(keptAll, "the editor's preparation left joints of a Truebones skeleton out");
         if (nameDiffs == 0 && faceSame)
             Assert.True(own.GroundDiff < 0.05f, $"the port's motion stands {own.GroundDiff:0.000} off where UniMate's does");
     }

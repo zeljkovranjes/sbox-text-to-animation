@@ -111,9 +111,10 @@ public sealed class UniMateRig
 	/// </param>
 	/// <param name="skipHelpers">
 	/// Leave procedural helper bones out of what UniMate animates (they keep following their limbs): bones the
-	/// model's constraints drive, and bones upstream's name rule calls twist / helper / IK / clothing bones. UniMate
-	/// never trained on them; on the s&amp;box human they leave the shins kicking up (lowest shin angle 3 deg below
-	/// horizontal against UniMate's 36). Off reproduces upstream's preparation exactly (tests).
+	/// model's constraints drive, and bones upstream's name rule calls twist / helper / IK / clothing bones (and
+	/// fingers) under the people statistics, whose Mixamo body has none; for animals and objects only such names
+	/// outside UniMate's training vocabulary. On the s&amp;box human they left the shins kicking up (lowest shin angle
+	/// 3 deg below horizontal against UniMate's 36). Off reproduces upstream's preparation exactly (tests).
 	/// </param>
 	public static UniMateRig Build( MotionRig rig, RigFamily family = RigFamily.Auto, bool alignVocabulary = true, bool skipHelpers = true )
 	{
@@ -123,14 +124,18 @@ public sealed class UniMateRig
 		var objectType = UniMateSkin.ObjectTypeOf( s );
 		var driven = UniMateSkin.DrivenOf( s );
 		if ( family == RigFamily.Auto ) family = DetectFamily( rig );
-		// under the people statistics (Mixamo: 22 joints, no fingers) finger chains are as foreign as helpers
-		var skipFingers = skipHelpers && family == RigFamily.Humanoid;
+		// under the people statistics (Mixamo: 22 joints, no twists, no fingers) helper and finger chains are foreign;
+		// Truebones and Objaverse did train on twist, IK-chain and finger joints, so for animals and objects only
+		// helper names outside the training vocabulary are left out
+		var people = family == RigFamily.Humanoid;
 		bool Helper( int b )
 		{
 			if ( !skipHelpers ) return false;
 			if ( driven.Contains( s[b].Name ) ) return true;
-			var words = UniMateNames.Clean( s[b].Name, objectType ).Split( ' ' );
-			return words.Any( HelperWords.Contains ) || (skipFingers && words.Any( FingerWords.Contains ));
+			var clean = UniMateNames.Clean( s[b].Name, objectType );
+			var words = clean.Split( ' ' );
+			if ( people ) return words.Any( HelperWords.Contains ) || words.Any( FingerWords.Contains );
+			return words.Any( HelperWords.Contains ) && !UniMateVocabulary.Names.Contains( clean );
 		}
 		(double Max, double Sum) W( int b ) => Helper( b ) ? (0, 0)
 			: weights is null ? (1, 1) : weights.TryGetValue( s[b].Name, out var w ) ? w : (0, 0);
