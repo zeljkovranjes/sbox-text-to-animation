@@ -77,6 +77,22 @@ public sealed class UniMateRig
 	/// <summary>Words upstream's name rule gives procedural helper bones (twist / helper / IK targets / cloth).</summary>
 	static readonly HashSet<string> HelperWords = new( StringComparer.Ordinal ) { "Twist", "Helper", "Ikrule", "Target", "Clothing", "IK" };
 
+	/// <summary>The joints of UniMate's people (Mixamo, clean names; "Spine" three times).</summary>
+	static readonly HashSet<string> MixamoBody = new( StringComparer.Ordinal )
+	{
+		"Hips", "Spine", "Neck", "Head", "Left Shoulder", "Right Shoulder", "Left Upper Arm", "Right Upper Arm", "Left Forearm", "Right Forearm",
+		"Left Hand", "Right Hand", "Left Thigh", "Right Thigh", "Left Shin", "Right Shin", "Left Foot", "Right Foot", "Left Toe", "Right Toe",
+	};
+	/// <summary>Joints a person must have to be shown to UniMate as a Mixamo body.</summary>
+	static readonly HashSet<string> MixamoCore = new( StringComparer.Ordinal )
+	{
+		"Hips", "Spine", "Head", "Left Upper Arm", "Right Upper Arm", "Left Forearm", "Right Forearm", "Left Hand", "Right Hand",
+		"Left Thigh", "Right Thigh", "Left Shin", "Right Shin", "Left Foot", "Right Foot",
+	};
+
+	/// <summary>Mixamo's word for a joint where people rigs differ ("Left Ankle" is Mixamo's "Left Foot").</summary>
+	static string PeopleName( string clean ) => clean.Replace( "Ankle", "Foot" );
+
 	/// <summary>Words upstream's name rule gives finger bones.</summary>
 	static readonly HashSet<string> FingerWords = new( StringComparer.Ordinal ) { "Finger", "Thumb" };
 
@@ -116,20 +132,35 @@ public sealed class UniMateRig
 	/// outside UniMate's training vocabulary. On the s&amp;box human they left the shins kicking up (lowest shin angle
 	/// 3 deg below horizontal against UniMate's 36). Off reproduces upstream's preparation exactly (tests).
 	/// </param>
-	public static UniMateRig Build( MotionRig rig, RigFamily family = RigFamily.Auto, bool alignVocabulary = true, bool skipHelpers = true )
+	/// <param name="peopleBody">
+	/// Under the people statistics, show UniMate a person as the Mixamo bodies it learned people from: exactly their
+	/// joints (hips, three spine joints, neck, head, shoulders, arms, hands, legs, feet, toes - Mixamo's names, so an
+	/// "ankle" is a "foot"), arms in a T-pose. Everything else follows the animated bones as the engine poses it; the
+	/// T-pose only changes the arm bones' rest rotations UniMate is given (every bone keeps its offsets, so the
+	/// motion lands exactly on the real bones; the model is untouched). Measured on the s&amp;box human over three
+	/// seeds against UniMate's own Mixamo body: walking arms 64 deg below horizontal (UniMate 65, before 71), punch
+	/// arm extension 0.82 (UniMate 0.74, before 0.96), hands 0.66 of height (0.70, before 0.62), hip drift 0.20
+	/// (0.14, before 0.27). A rig without those joints keeps the rule above. Off reproduces upstream (tests).
+	/// </param>
+	public static UniMateRig Build( MotionRig rig, RigFamily family = RigFamily.Auto, bool alignVocabulary = true, bool skipHelpers = true, bool peopleBody = true )
 	{
 		var s = rig.Skeleton;
-		var rest = s.RestWorld;
 		var weights = UniMateSkin.WeightsOf( s );
 		var objectType = UniMateSkin.ObjectTypeOf( s );
 		var driven = UniMateSkin.DrivenOf( s );
 		if ( family == RigFamily.Auto ) family = DetectFamily( rig );
+		string PeopleNameOf( int b ) => PeopleName( UniMateVocabulary.Align( UniMateNames.Clean( s[b].Name, objectType ) ) );
+		var mixamoBody = peopleBody && family == RigFamily.Humanoid
+			&& MixamoCore.IsSubsetOf( Enumerable.Range( 0, s.Count ).Where( b => !driven.Contains( s[b].Name ) ).Select( PeopleNameOf ) );
+		var posed = mixamoBody ? ArmsInTPose( rig ) : null;
+		IReadOnlyList<XForm> rest = posed ?? s.RestWorld;
 		// under the people statistics (Mixamo: 22 joints, no twists, no fingers) helper and finger chains are foreign;
 		// Truebones and Objaverse did train on twist, IK-chain and finger joints, so for animals and objects only
 		// helper names outside the training vocabulary are left out
 		var people = family == RigFamily.Humanoid;
 		bool Helper( int b )
 		{
+			if ( mixamoBody ) return driven.Contains( s[b].Name ) || !MixamoBody.Contains( PeopleNameOf( b ) );
 			if ( !skipHelpers ) return false;
 			if ( driven.Contains( s[b].Name ) ) return true;
 			var clean = UniMateNames.Clean( s[b].Name, objectType );
@@ -159,7 +190,7 @@ public sealed class UniMateRig
 			var bodyAxis = prep.BodyAxis;
 			if ( alignVocabulary )
 			{
-				var aligned = names.Select( UniMateVocabulary.Align ).ToArray();
+				var aligned = names.Select( UniMateVocabulary.Align ).Select( n => mixamoBody ? PeopleName( n ) : n ).ToArray();
 				if ( !aligned.SequenceEqual( names ) )
 				{
 					names = aligned;
@@ -172,7 +203,67 @@ public sealed class UniMateRig
 		}
 		catch ( ArgumentException e ) { throw new InvalidOperationException( e.Message, e ); }
 		var bone = skeleton.SourceIndex.Select( i => prep.Kept[i] ).ToArray();
-		return new UniMateRig( rig, skeleton, bone, new Vector3[bone.Length], family ) { Prep = prep };
+		return new UniMateRig( rig, skeleton, bone, new Vector3[bone.Length], family ) { Prep = prep, AsMixamoBody = mixamoBody };
+	}
+
+	/// <summary>UniMate joints with no child joint (their own rotation is not part of the motion).</summary>
+	bool[] EndJoint => _endJoint ??= Enumerable.Range( 0, Count ).Select( j => !Skeleton.Parents.Contains( j ) ).ToArray();
+	bool[] _endJoint;
+
+	/// <summary>True when UniMate was shown this person as a Mixamo body (see Build's peopleBody).</summary>
+	public bool AsMixamoBody { get; private init; }
+
+	/// <summary>Arms further than this from level and straight count as not in a T-pose.</summary>
+	const float TPoseToleranceDeg = 20f;
+
+	/// <summary>
+	/// The rest pose with each arm (upper arm, forearm, hand; a clavicle stays) turned level and straight out to its
+	/// side, as Mixamo characters stand, or null when the arms already are. World transforms.
+	/// </summary>
+	static XForm[] ArmsInTPose( MotionRig rig )
+	{
+		var s = rig.Skeleton;
+		var arms = rig.Analysis.Limbs.Where( l => l.Kind == LimbKind.Arm && l.Chain.Count >= 3 ).ToList();
+		if ( arms.Count == 0 ) return null;
+		var world = s.RestWorld.ToArray();
+		var children = new List<int>[s.Count];
+		for ( var b = 0; b < s.Count; b++ ) children[b] = new List<int>();
+		for ( var b = 0; b < s.Count; b++ ) if ( s[b].ParentIndex >= 0 ) children[s[b].ParentIndex].Add( b );
+		var lateralAxis = Vector3.Normalize( Vector3.Cross( rig.Up, rig.Forward ) );
+		void Turn( int b, Vector3 tip, Vector3 target )
+		{
+			var dir = tip - world[b].Pos;
+			if ( dir.LengthSquared() < 1e-8f ) return;
+			var delta = MathQ.FromTo( Vector3.Normalize( dir ), target );
+			var pivot = world[b].Pos;
+			var stack = new Stack<int>(); stack.Push( b );
+			while ( stack.Count > 0 )
+			{
+				var d = stack.Pop();
+				world[d] = new XForm( pivot + Vector3.Transform( world[d].Pos - pivot, delta ), Quaternion.Normalize( delta * world[d].Rot ) );
+				foreach ( var c in children[d] ) stack.Push( c );
+			}
+		}
+		Vector3 TipOf( int b, int next ) => next >= 0 ? world[next].Pos
+			: children[b].Count > 0 ? children[b].Aggregate( Vector3.Zero, ( a, c ) => a + world[c].Pos ) / children[b].Count : world[b].Pos;
+		var changed = false;
+		foreach ( var arm in arms )
+		{
+			var chain = arm.Chain;
+			var start = chain.Count >= 4 ? 1 : 0;
+			var outward = Vector3.Dot( world[chain[start]].Pos - world[arm.Attach].Pos, lateralAxis ) >= 0 ? lateralAxis : -lateralAxis;
+			for ( var i = start; i < chain.Count; i++ )
+			{
+				var b = chain[i];
+				var tip = TipOf( b, i + 1 < chain.Count ? chain[i + 1] : -1 );
+				var dir = tip - world[b].Pos;
+				if ( dir.LengthSquared() < 1e-8f ) continue;
+				if ( MathQ.AngleBetween( Vector3.Normalize( dir ), outward ) * 180f / MathF.PI <= TPoseToleranceDeg ) continue;
+				Turn( b, tip, outward );
+				changed = true;
+			}
+		}
+		return changed ? world : null;
 	}
 
 	/// <summary>How upstream's preparation treated this rig (kept bones, names, facing, trimmed leaves).</summary>
@@ -226,7 +317,10 @@ public sealed class UniMateRig
 		for ( var t = 0; t < T; t++ )
 		{
 			Array.Clear( desiredWorld );
-			for ( var j = 0; j < Count; j++ ) if ( Bone[j] >= 0 ) desiredWorld[Bone[j]] = motion.WorldRot[t, j];
+			// an end joint (hand, head, toe) has no rotation of its own in UniMate's motion - nothing below it to aim - so
+			// it keeps the rig's own relation to its parent (upstream leaves end joints at rest too); the rest UniMate
+			// saw may differ from the rig's (arms shown in a T-pose), which would turn the wrists
+			for ( var j = 0; j < Count; j++ ) if ( Bone[j] >= 0 && !EndJoint[j] ) desiredWorld[Bone[j]] = motion.WorldRot[t, j];
 			var src = baseFrames is { Count: > 0 } ? baseFrames[Math.Min( t, baseFrames.Count - 1 )] : null;
 			var frame = new XForm[s.Count];
 			var carry = Quaternion.Identity;

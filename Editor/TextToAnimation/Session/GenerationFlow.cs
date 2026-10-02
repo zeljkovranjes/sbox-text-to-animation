@@ -116,6 +116,14 @@ public sealed class GenerationFlow
 			if ( replace ) made.Insert( 0, target );
 			_session.RecordPrompt( string.Join( " → ", request.Prompts.Where( p => !string.IsNullOrWhiteSpace( p ) ) ), request.Mode.ToString(), request.Seed, made );
 			var notes = results.SelectMany( r => r.Notes ).Distinct().ToList();
+			// a GPU the network couldn't run on (or that disagreed with the CPU) leaves generation on the CPU: slow, and
+			// the editor shares its cores - say so instead of just being slow
+			if ( Inference.Onnx.GpuAcceleration.Status is { } gpu )
+			{
+				if ( gpu != _gpuLogged ) Log.Warning( $"[text-to-animation] generating on the CPU: {gpu}" );
+				_gpuLogged = gpu;
+				notes.Add( $"Generated on the CPU ({gpu})" );
+			}
 			var seconds = (DateTime.UtcNow - started).TotalSeconds;
 			_session.SetStatus( notes.Count > 0 ? string.Join( " ", notes ) : $"Generated in {seconds:0} s.", notes.Count > 0 ? UI.Tone.Amber : UI.Tone.Accent );
 			return true;
@@ -141,6 +149,8 @@ public sealed class GenerationFlow
 			_session.SetBusy( false );
 		}
 	}
+
+	string _gpuLogged;
 
 	void AddResult( GeneratedMotion motion, GenerationRecord record, string name, bool select )
 	{

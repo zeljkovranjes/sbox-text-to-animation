@@ -192,6 +192,7 @@ public sealed class AnimationViewport : SceneRenderingWidget
 		var rig = _session.Rig;
 		if ( rig is null || frames is null || frames.Count == 0 )
 		{
+			_gizmoHovered = false;
 			UpdateCamera( _target );
 			if ( ShowGround ) DrawGround( Vector3.Zero, 0f, 40f );
 			return;
@@ -211,7 +212,12 @@ public sealed class AnimationViewport : SceneRenderingWidget
 		if ( ShowSkeleton || !ShowModel ) DrawSkeleton( rig );
 		DrawBonePicking( rig );
 		DrawPoseGizmo( rig );
+		_gizmoHovered = Gizmo.HasHovered;
 	}
+
+	// whether a bone dot or pose handle is under the mouse, as of the last drawn frame: Gizmo.HasHovered only works
+	// while the gizmos are being drawn, not in mouse events
+	bool _gizmoHovered;
 
 	static Vector3 ToVec( System.Numerics.Vector3 v ) => new( v.X, v.Y, v.Z );
 
@@ -401,7 +407,7 @@ public sealed class AnimationViewport : SceneRenderingWidget
 		base.OnMousePress( e );
 		_lastMouse = e.LocalPosition;
 		// left-drag on empty space looks around (on a bone or a gizmo handle it picks or poses instead)
-		_orbiting = e.LeftMouseButton && !Gizmo.HasHovered;
+		_orbiting = e.LeftMouseButton && !_gizmoHovered;
 	}
 
 	protected override void OnMouseReleased( MouseEvent e )
@@ -439,7 +445,7 @@ public sealed class AnimationViewport : SceneRenderingWidget
 	protected override void OnDoubleClick( MouseEvent e )
 	{
 		base.OnDoubleClick( e );
-		if ( e.LeftMouseButton && !Gizmo.HasHovered ) FrameCharacter();
+		if ( e.LeftMouseButton && !_gizmoHovered ) FrameCharacter();
 	}
 
 	// ---------------------------------------------------------------- overlays

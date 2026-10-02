@@ -74,5 +74,13 @@ public class UniMateGeneratorTests
         // and the character stays upright with the hips near their rest height
         var restHips = rig.Skeleton.RestWorld[rig.HipsIndex].Pos.Z;
         Assert.InRange(path.Average(p => p.Z), restHips * 0.75f, restHips * 1.2f);
+        // wrists and fingers: UniMate's people have no finger joints and no hand rotation (the hand ends the arm),
+        // so hands and fingers keep the model's own relation to the forearm - never the T-pose UniMate was shown
+        var s = rig.Skeleton;
+        var held = Enumerable.Range(0, s.Count).Where(b => s[b].Name is "hand_L" or "hand_R" || s[b].Name.StartsWith("finger_")).ToList();
+        Assert.True(held.Count > 20);
+        var worst = held.Max(b => motion.Frames.Max(f => TextToAnimation.Maths.MathQ.AngleBetween(f[b].Rot, s[b].RestLocal.Rot))) * 180 / MathF.PI;
+        _out.WriteLine($"hands and fingers off their rest relation by up to {worst:0.000} deg");
+        Assert.True(worst < 0.01f, $"a hand or finger turned {worst} deg against its parent");
     }
 }

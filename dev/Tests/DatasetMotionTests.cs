@@ -66,7 +66,7 @@ public class DatasetMotionTests
         // ---- the port decides: preparation, facing, names, statistics
         // every joint, as upstream prepares it; the editor's preparation (which may leave helper/finger chains to the
         // engine under the people statistics) is compared as shipped below when it keeps every joint
-        var uni = UniMateRig.Build(rig, skipHelpers: false);
+        var uni = UniMateRig.Build(rig, skipHelpers: false, peopleBody: false);
         Assert.Equal(J, uni.Count);
         var shipped = UniMateRig.Build(rig);
         var cOf = Enumerable.Range(0, J).Select(u => Array.FindIndex(uni.Bone, b => skeleton[b].Name == names[u])).ToArray();

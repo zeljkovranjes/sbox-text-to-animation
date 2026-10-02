@@ -23,7 +23,8 @@ public sealed class ExecContext
 	public static float[] Alloc( int n ) => Current?.Pool.Rent( n ) ?? new float[n];
 	/// <summary>A zero-filled output buffer.</summary>
 	public static float[] AllocZeroed( int n ) => Current?.Pool.RentZeroed( n ) ?? new float[n];
-	public int MaxThreads = Math.Max( 1, Environment.ProcessorCount - 1 );
+	// two cores stay free: the editor's main and render threads keep running smoothly while a model runs on the CPU
+	public int MaxThreads = Math.Max( 1, Environment.ProcessorCount - 2 );
 	public ParallelOptions Parallel => new() { MaxDegreeOfParallelism = MaxThreads };
 }
 
