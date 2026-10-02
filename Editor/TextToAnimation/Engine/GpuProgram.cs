@@ -75,12 +75,65 @@ public sealed class GpuProgram : IGpuProgram
 				}
 				dirty.Add( bufs[^1] );
 			}
+			if ( UseCommandList ) BuildCommandList();
 		}
 		catch
 		{
 			Dispose();
 			throw;
 		}
+	}
+
+	/// <summary>
+	/// Run the network as one command list - every launch with its bindings, a UAV barrier after each - executed by
+	/// rendering a hidden camera, instead of one dispatch at a time with a full GPU flush between dependent ones
+	/// (hundreds of CPU-GPU round trips per network call, each waiting on everything else the GPU is drawing).
+	/// </summary>
+	public static bool UseCommandList = Environment.GetEnvironmentVariable( "T2A_GPU_FLUSH" ) != "1";
+
+	/// <summary>Launches per command list: each is one submission, so a frame's slice submits a few of them.</summary>
+	const int ChunkLaunches = 48;
+
+	List<Sandbox.Rendering.CommandList> _lists;
+	Scene _scene;
+	CameraComponent _camera;
+	Texture _target;
+
+	void BuildCommandList()
+	{
+		_lists = new List<Sandbox.Rendering.CommandList>();
+		for ( var start = 0; start < _plan.Launches.Count; start += ChunkLaunches )
+		{
+			var list = new Sandbox.Rendering.CommandList( $"t2a network {start}" );
+			for ( var i = start; i < Math.Min( start + ChunkLaunches, _plan.Launches.Count ); i++ )
+			{
+				var launch = _plan.Launches[i];
+				var (_, slots) = Kernels[launch.Kernel];
+				list.Attributes.Set( "P", _params[i] );
+				for ( var k = 0; k < slots.Length; k++ ) list.Attributes.Set( slots[k], _buffers[launch.Buffers[k]] );
+				list.DispatchCompute( _shaders[launch.Kernel], launch.ThreadsX, launch.ThreadsY, 1 );
+				list.UavBarrier( _buffers[launch.Buffers[^1]] );
+			}
+			_lists.Add( list );
+		}
+		_scene = new Scene();
+		using ( _scene.Push() )
+		{
+			var go = new GameObject( true, "t2a network" );
+			_camera = go.Components.Create<CameraComponent>();
+			// nothing to draw: no post-processing (its downsample chain breaks on a tiny target), nothing in the scene
+			_camera.EnablePostProcessing = false;
+		}
+		_target = Texture.CreateRenderTarget( "t2a network", ImageFormat.RGBA8888, new Vector2( 64, 64 ) );
+	}
+
+	/// <summary>Submits one chunk of the network to the GPU (a render of the hidden camera carrying its command list).</summary>
+	void Submit( int chunk )
+	{
+		var list = _lists[chunk];
+		_camera.AddCommandList( list, Sandbox.Rendering.Stage.AfterOpaque, 0 );
+		try { _camera.RenderToTexture( _target, default ); }
+		finally { _camera.RemoveCommandList( list ); }
 	}
 
 	/// <summary>
@@ -151,20 +204,25 @@ public sealed class GpuProgram : IGpuProgram
 					p._buffers[buffer].SetData( _feed[name].F.AsSpan() );
 				_next = 0;
 			}
+			if ( p._lists is not null )
+			{
+				// chunks of the network, as many as the slice allows; the GPU runs them while the editor draws
+				do
+				{
+					if ( _chunk == p._lists.Count )
+					{
+						// the GPU runs the submitted chunks when their results are read, so read at once
+						Result = p.ReadOutputs();
+						return true;
+					}
+					p.Submit( _chunk++ );
+				}
+				while ( Now < deadline );
+				return false;
+			}
 			do
 			{
-				if ( _next == p._launches.Count )
-				{
-					var result = new Dictionary<string, float[]>( StringComparer.Ordinal );
-					foreach ( var (name, (buffer, shape)) in p._plan.Outputs )
-					{
-						var data = new float[shape.Aggregate( 1, ( a, d ) => a * d )];
-						p._buffers[buffer].GetData( data.AsSpan() );
-						result[name] = data;
-					}
-					Result = result;
-					return true;
-				}
+				if ( _next == p._launches.Count ) { Result = p.ReadOutputs(); return true; }
 				if ( p._flushBefore[_next] ) Graphics.FlushGPU();
 				var (shader, attributes, x, y, _) = p._launches[_next];
 				shader.DispatchWithAttributes( attributes, x, y, 1 );
@@ -173,6 +231,19 @@ public sealed class GpuProgram : IGpuProgram
 			while ( Now < deadline );
 			return false;
 		}
+		int _chunk;
+	}
+
+	Dictionary<string, float[]> ReadOutputs()
+	{
+		var result = new Dictionary<string, float[]>( StringComparer.Ordinal );
+		foreach ( var (name, (buffer, shape)) in _plan.Outputs )
+		{
+			var data = new float[shape.Aggregate( 1, ( a, d ) => a * d )];
+			_buffers[buffer].GetData( data.AsSpan() );
+			result[name] = data;
+		}
+		return result;
 	}
 
 	public string Diagnose( IReadOnlyDictionary<string, Tensor> feed, IReadOnlyDictionary<string, float[]> cpu ) => OnMain( () =>
@@ -207,6 +278,8 @@ public sealed class GpuProgram : IGpuProgram
 		_disposed = true;
 		OnMain( () =>
 		{
+			_scene?.Destroy();
+			_target?.Dispose();
 			foreach ( var b in _buffers ) b?.Dispose();
 			foreach ( var p in _params ) p.Dispose();
 			return 0;

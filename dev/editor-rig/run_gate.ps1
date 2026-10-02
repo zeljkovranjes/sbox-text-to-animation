@@ -91,6 +91,14 @@ while ((Get-Date) -lt $deadline) {
         } catch { }
     }
     if ($proc.HasExited) { break }
+    # a library that fails to compile never starts the gate: stop at once instead of waiting out the timeout
+    if (-not (Test-Path $resultPath) -and (Test-Path $sboxLog)) {
+        $fs = [System.IO.File]::Open($sboxLog, 'Open', 'Read', 'ReadWrite')
+        try {
+            if ($fs.Length -ge $preLogLen) { $fs.Seek($preLogLen, 'Begin') | Out-Null; $tail = (New-Object System.IO.StreamReader($fs)).ReadToEnd() } else { $tail = "" }
+        } finally { $fs.Dispose() }
+        if ($tail -match "Compile of '[^']*(text_to_animation|t2ascratch)[^']*' Failed") { Write-Warning "The library failed to compile in s&box."; break }
+    }
     Start-Sleep -Seconds 2
 }
 if ($completed -and -not $proc.HasExited) { $proc.WaitForExit(30000) | Out-Null }
