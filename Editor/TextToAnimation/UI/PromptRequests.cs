@@ -51,18 +51,35 @@ public static class PromptRequests
 		}
 		else if ( intent == EditIntent.New ) session.SelectClip( null );
 
+		// a new animation written one step per line (Shift+Enter) is a sequence: each line continues the one before,
+		// as upstream's motion expansion takes a list of prompts; a single line is one caption, whole
+		var lines = prompt.Split( LineBreaks ).Select( l => l.Trim() ).Where( l => l.Length > 0 ).ToList();
+		if ( mode == GenerationMode.TextToMotion && lines.Count > 1 ) mode = GenerationMode.Expansion;
+		var prompts = mode == GenerationMode.Expansion ? lines : new List<string> { prompt };
+
 		var seed = options.Seed ?? Random.Shared.Next( 1, 99999 );
-		var request = GenerationFlow.BuildRequest( session, mode, new[] { prompt }, options.Seconds, seed, options.Takes,
+		var request = GenerationFlow.BuildRequest( session, mode, prompts, options.Seconds, seed, options.Takes,
 			options.Guidance, options.Steps, options.VariationStrength, keep, options.CleanUp );
-		var shortName = prompt.Length > 0 ? GenerationFlow.NameFromPrompt( prompt ) : null;
+		var shortName = mode == GenerationMode.Expansion ? SequenceName( lines )
+			: prompt.Length > 0 ? GenerationFlow.NameFromPrompt( prompt ) : null;
 		var name = mode switch
 		{
-			GenerationMode.TextToMotion => shortName ?? "Generated",
+			GenerationMode.TextToMotion or GenerationMode.Expansion => shortName ?? "Generated",
 			GenerationMode.InBetween => $"{target!.Name} (in-between)",
 			GenerationMode.Variation when intent == EditIntent.Variations => $"{target!.Name} (variation)",
 			_ => shortName is null ? $"{target!.Name} (changed)" : $"{target!.Name} · {shortName}",
 		};
 		return (request, name);
+	}
+
+	/// <summary>Every way the prompt box can break a line (Shift+Enter may give Qt's line or paragraph separator).</summary>
+	static readonly char[] LineBreaks = { (char)10, (char)13, (char)0x2028, (char)0x2029 };
+
+	/// <summary>A sequence's name: its steps in order ("Walks forward, turns around, runs forward"), shortened when long.</summary>
+	public static string SequenceName( IReadOnlyList<string> steps )
+	{
+		var names = steps.Select( GenerationFlow.NameFromPrompt ).Select( ( n, i ) => i == 0 || n.Length == 0 ? n : char.ToLowerInvariant( n[0] ) + n[1..] );
+		return GenerationFlow.NameFromPrompt( string.Join( ", ", names ) );
 	}
 
 	/// <summary>Bones that keep their motion when only <paramref name="scope"/> changes.</summary>

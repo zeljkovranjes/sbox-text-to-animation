@@ -9,6 +9,13 @@ namespace TextToAnimation.Editor.UI;
 /// </summary>
 public sealed class HelpPopup : PopupWidget
 {
+	/// <summary>How prompts are written (as UniMate's captions are).</summary>
+	public static readonly (string Action, string How)[] Prompts =
+	{
+		("One animation", "One sentence for the whole motion: \"An object walks forward.\""),
+		("A sequence", "One step per line (Shift+Enter): each line continues from the one before"),
+	};
+
 	/// <summary>Mouse gestures in the 3D preview.</summary>
 	public static readonly (string Action, string How)[] Preview =
 	{
@@ -54,6 +61,7 @@ public sealed class HelpPopup : PopupWidget
 		Layout = Layout.Column();
 		Layout.Margin = 12;
 		Layout.Spacing = 4;
+		Section( "Prompts", Prompts );
 		Section( "Preview", Preview );
 		Section( "Timeline", Timeline );
 		Layout.AddSpacingCell( 8 );

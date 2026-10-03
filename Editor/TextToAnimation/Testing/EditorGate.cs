@@ -624,6 +624,18 @@ public static class EditorGate
 			check( "variations have no quality errors", takes.All( NoErrors ), "" );
 		}
 
+		// the prompt box: one step per line (Shift+Enter, in either of Qt's line breaks) is a sequence; one line, however
+		// it is worded ("runs and then ..."), is a single caption
+		{
+			var options = window.EditPrompt.Options;
+			var lineSep = ((char)0x2028).ToString();
+			var (multi, multiName) = UI.PromptRequests.Build( session, "An object walks forward.\nAn object turns around." + lineSep + "An object runs forward.", options, null, UI.EditIntent.New );
+			var (single, _) = UI.PromptRequests.Build( session, "An object runs and then performs a front flip.", options, null, UI.EditIntent.New );
+			check( "a prompt with one step per line makes a sequence", multi.Mode == GenerationMode.Expansion && multi.Prompts.Count == 3 && single.Mode == GenerationMode.TextToMotion && single.Prompts.Count == 1,
+				$"{multi.Mode} x{multi.Prompts.Count} \"{multiName}\"; one line: {single.Mode}" );
+			session.SelectClip( source );
+		}
+
 		// multi-step sequence: three prompts chained into one longer motion
 		var sequence = (await Generate( GenerationMode.Expansion, new[] { "walk forward", "turn around", "walk forward" }, 1, "Gate sequence" )).FirstOrDefault();
 		check( "multi-step sequence generates a longer motion", sequence is not null && sequence.Duration > 4f, sequence is null ? "" : $"{sequence.Duration:0.00} s" );
