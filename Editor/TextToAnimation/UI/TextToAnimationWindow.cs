@@ -222,7 +222,19 @@ public sealed class TextToAnimationWindow : Widget
 
 		// the dock: prompt, transport, timeline
 		var timelineCard = center.Add( new TaCard( this ) );
-		_editPrompt = timelineCard.Layout.Add( new PromptComposer( timelineCard, "Describe a change…" ) );
+		// the layout keeps one line for the prompt: more lines (Shift+Enter) grow it down over the transport and timeline
+		// instead of resizing the 3D view, which makes the engine rebuild the view's render targets (a visible stall)
+		var promptSlot = timelineCard.Layout.Add( new Slot( timelineCard ) { FixedHeight = PromptComposer.SingleLineHeight } );
+		_editPrompt = new PromptComposer( timelineCard, "Describe a change…" );
+		void PlacePrompt()
+		{
+			if ( !_editPrompt.IsValid() || !promptSlot.IsValid() ) return;
+			_editPrompt.Position = promptSlot.Position;
+			_editPrompt.Size = new Vector2( promptSlot.Width, _editPrompt.Height );
+			_editPrompt.Raise();
+		}
+		promptSlot.Placed = PlacePrompt;
+		_editPrompt.HeightChanged = PlacePrompt;
 		_editPrompt.ShowLength = false;
 		_editPrompt.Submitted = prompt => _ = RunEditPromptAsync( prompt );
 		_editPrompt.StopRequested = () => Flow.Cancel();
@@ -803,5 +815,14 @@ public sealed class TextToAnimationWindow : Widget
 		_status.ToolTip = text;
 		_status.SetStyles( $"color: {(tone == Tone.Neutral ? Theme.Text : color).Hex};" );
 		_statusDot.Color = tone == Tone.Neutral ? TaStyle.Accent : color;
+	}
+
+	/// <summary>Space a layout keeps for a widget placed over it by hand; says when it moves or resizes.</summary>
+	sealed class Slot : Widget
+	{
+		public Action Placed { get; set; }
+		public Slot( Widget parent ) : base( parent ) { }
+		protected override void OnResize() { base.OnResize(); Placed?.Invoke(); }
+		protected override void OnMoved() { base.OnMoved(); Placed?.Invoke(); }
 	}
 }

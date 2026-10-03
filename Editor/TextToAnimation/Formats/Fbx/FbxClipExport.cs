@@ -324,7 +324,7 @@ public static class FbxClipExport
 	/// The similarity transform (uniform scale, rotation, translation) best mapping <paramref name="from"/> onto
 	/// <paramref name="to"/> in the least-squares sense (Umeyama), as a row-vector matrix: to ~ from * M.
 	/// </summary>
-	static (Matrix4x4 M, float Scale, float Error) Similarity( IReadOnlyList<Vector3> from, IReadOnlyList<Vector3> to )
+	internal static (Matrix4x4 M, float Scale, float Error) Similarity( IReadOnlyList<Vector3> from, IReadOnlyList<Vector3> to )
 	{
 		var n = from.Count;
 		var ca = from.Aggregate( Vector3.Zero, ( s, v ) => s + v ) / n;

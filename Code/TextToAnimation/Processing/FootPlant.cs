@@ -29,11 +29,6 @@ public sealed class FootPlantOptions
     /// <summary>Maximum allowed per-segment length stretch (fraction; 0.02 = 2%).</summary>
     public float MaxStretch { get; set; } = 0.02f;
 
-    /// <summary>
-    /// A plant is only kept when its foot strays from the plant's anchor by at most this fraction of the leg's length
-    /// (horizontally): a foot gliding further is not standing, and holding it would drag the leg (unlimited by default).
-    /// </summary>
-    public float MaxPlantDrift { get; set; } = float.PositiveInfinity;
 }
 
 /// <summary>A leg chain identified by skeleton bone indices.</summary>
@@ -171,54 +166,6 @@ public static class FootPlant
     }
 
     /// <summary>
-    /// Locks the planted feet of any number of legs (a quadruped's four, a spider's eight) against one ground: each
-    /// foot touches it at its own rest height above the lowest resting foot (a digitigrade hind ankle sits higher
-    /// than a front paw), so a foot that never comes down to its contact height - a bird's tucked feet in flight -
-    /// is never planted. Returns one report per foot, in order.
-    /// </summary>
-    public static List<FootPlantFootReport> ApplyAll(
-        List<XForm[]> frames,
-        SkeletonModel skeleton,
-        IReadOnlyList<FootChain> feet,
-        Vector3 up,
-        float fps,
-        FootPlantOptions? options = null)
-    {
-        ArgumentNullException.ThrowIfNull(frames);
-        ArgumentNullException.ThrowIfNull(skeleton);
-        ArgumentNullException.ThrowIfNull(feet);
-        options ??= new FootPlantOptions();
-        var reports = feet.Select(_ => new FootPlantFootReport()).ToList();
-        int n = frames.Count;
-        if (n == 0 || feet.Count == 0 || up.LengthSquared() < 1e-12f || fps <= 0f)
-            return reports;
-        up = Vector3.Normalize(up);
-
-        var ankles = feet.Select(f => AnkleWorldPositions(frames, skeleton, f.Ankle)).ToArray();
-        var restHeights = feet.Select(f => Vector3.Dot(skeleton.RestWorld[f.Ankle].Pos, up)).ToArray();
-        var lowestRest = restHeights.Min();
-        var contact = restHeights.Select(h => h - lowestRest).ToArray();
-
-        // ground: the robust low of every foot's height less its contact height
-        var lows = new float[n];
-        for (int i = 0; i < n; i++)
-        {
-            var low = float.MaxValue;
-            for (int k = 0; k < feet.Count; k++)
-                low = MathF.Min(low, Vector3.Dot(ankles[k][i], up) - contact[k]);
-            lows[i] = low;
-        }
-        Array.Sort(lows);
-        // never above the rest pose's floor: a clip spent in the air (a bird flying) has no ground in it
-        var ground = MathF.Min(lows[(int)MathF.Floor(0.05f * (n - 1))], lowestRest + options.HeightThresholdCm);
-
-        var fkScratch = new XForm[skeleton.Count];
-        for (int k = 0; k < feet.Count; k++)
-            ProcessFoot(frames, skeleton, feet[k], ankles[k], up, fps, ground + contact[k], options, reports[k], fkScratch);
-        return reports;
-    }
-
-    /// <summary>
     /// Detection-only entry point — steps (a)+(b) of <see cref="Apply"/> (robust ground
     /// estimate, then per-foot hysteresis detection) without modifying anything. Used by
     /// callers that need plant intervals from a DIFFERENT clip than the one they correct:
@@ -260,25 +207,6 @@ public static class FootPlant
     {
         // (b) Detection with hysteresis + minimum duration.
         var plants = DetectPlants(ankle, up, ground, fps, options);
-        if (!float.IsPositiveInfinity(options.MaxPlantDrift))
-        {
-            var rest = skeleton.RestWorld;
-            var leg = Vector3.Distance(rest[chain.Hip].Pos, rest[chain.Knee].Pos) + Vector3.Distance(rest[chain.Knee].Pos, rest[chain.Ankle].Pos);
-            plants = plants.Where(p =>
-            {
-                var mean = Vector3.Zero;
-                for (int f = p.Start; f <= p.End; f++) mean += ankle[f];
-                mean /= p.Length;
-                var drift = 0f;
-                for (int f = p.Start; f <= p.End; f++)
-                {
-                    var d = ankle[f] - mean;
-                    d -= Vector3.Dot(d, up) * up;
-                    drift = MathF.Max(drift, d.Length());
-                }
-                return drift <= options.MaxPlantDrift * leg;
-            }).ToList();
-        }
         report.Plants.AddRange(plants);
         if (plants.Count == 0)
             return;

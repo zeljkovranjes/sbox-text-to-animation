@@ -239,6 +239,22 @@ public static class EditorGate
 			Check( "the prompt clears after sending", composer.Text.Length == 0 );
 			var recorded = session.PromptHistory.FirstOrDefault();
 			Check( "the prompt is remembered in the history", recorded?.Prompt == "walk forward" && generated is not null && recorded.ClipIds.Contains( generated.Id ), recorded?.Prompt ?? "" );
+			// more lines in the prompt (Shift+Enter) grow it over the dock: the 3D view keeps its size (resizing it
+			// makes the engine rebuild its render targets, a stall of a couple of seconds)
+			{
+				composer.Text = "An object walks forward.";
+				await EngineThread.DelayOnMain( 200 );
+				var view = window.Viewport.Size;
+				var oneLine = composer.Height;
+				composer.Text = "An object walks forward.\nAn object turns around.\nAn object runs forward.";
+				await EngineThread.DelayOnMain( 200 );
+				var grown = composer.Height;
+				var viewAfter = window.Viewport.Size;
+				Check( "new prompt lines grow the prompt without resizing the 3D view", grown > oneLine + 20 && (viewAfter - view).Length < 0.5f,
+					$"prompt {oneLine:0} -> {grown:0} px, view {view.x:0}x{view.y:0} -> {viewAfter.x:0}x{viewAfter.y:0}" );
+				if ( Environment.GetEnvironmentVariable( "T2A_GATE_SHOWCASE" ) == "1" ) await EngineThread.DelayOnMain( 4000 ); // for the -Capture screenshots
+				composer.Text = "";
+			}
 			var popup = new UI.PromptHistoryPopup( window, session, p => composer.Text = p );
 			popup.OpenAbove( composer );
 			await EngineThread.DelayOnMain( 300 );

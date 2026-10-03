@@ -17,19 +17,25 @@ public static class UniMateSkin
 		public IReadOnlyDictionary<string, (double Max, double Sum)> Weights;
 		public string ObjectType;
 		public IReadOnlySet<string> Driven;
+		public IReadOnlyDictionary<int, IReadOnlyList<System.Numerics.Vector3>> Points;
 	}
 
 	static readonly ConditionalWeakTable<Skeleton, Entry> _entries = new();
 
 	/// <summary>Attaches per-bone (largest single, total) skin weights, and the model's name (upstream's object type).</summary>
 	/// <param name="driven">Bones the model's own constraints drive at runtime (the engine poses them, not clips).</param>
+	/// <param name="points">The skinned mesh's points per bone in the rest pose (UniMate's collision capsules are fitted to them).</param>
 	public static void Attach( Skeleton skeleton, IReadOnlyDictionary<string, (double Max, double Sum)> weights, string objectType,
-		IReadOnlySet<string> driven = null )
+		IReadOnlySet<string> driven = null, IReadOnlyDictionary<int, IReadOnlyList<System.Numerics.Vector3>> points = null )
 	{
 		if ( skeleton is null ) return;
 		_entries.Remove( skeleton );
-		_entries.Add( skeleton, new Entry { Weights = weights, ObjectType = objectType ?? "", Driven = driven } );
+		_entries.Add( skeleton, new Entry { Weights = weights, ObjectType = objectType ?? "", Driven = driven, Points = points } );
 	}
+
+	/// <summary>The mesh points per bone attached to <paramref name="skeleton"/>, or null when unknown.</summary>
+	public static IReadOnlyDictionary<int, IReadOnlyList<System.Numerics.Vector3>> PointsOf( Skeleton skeleton )
+		=> skeleton is not null && _entries.TryGetValue( skeleton, out var e ) ? e.Points : null;
 
 	/// <summary>The bones the model's constraints drive (empty when unknown).</summary>
 	public static IReadOnlySet<string> DrivenOf( Skeleton skeleton )

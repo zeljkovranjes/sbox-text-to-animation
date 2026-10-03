@@ -167,7 +167,10 @@ public sealed class EditorSession
 		var weights = text is null ? null : EngineThread.Try( () => FbxSkin.ForVmdl( text, rel => VmdlSources.Resolve( rel, vmdl ) ) );
 		// bones the model's own constraints drive: the engine poses them, so generation leaves them to it
 		var driven = text is null ? null : EngineThread.Try( () => VmdlSources.ConstraintDrivenBones( text, vmdl ) );
-		Inference.UniMate.UniMateSkin.Attach( skeleton, weights, asset.Name, driven );
+		// the skinned mesh per bone: UniMate's clean-up fits its collision capsules to it
+		var points = text is null ? null : EngineThread.Try( () => FbxSkin.PointsForVmdl( text, rel => VmdlSources.Resolve( rel, vmdl ),
+			skeleton.Bones.Select( b => b.Name ).ToList(), skeleton.RestWorld.Select( x => (System.Numerics.Vector3)x.Pos ).ToList() ) );
+		Inference.UniMate.UniMateSkin.Attach( skeleton, weights, asset.Name, driven, points );
 
 		LoadWarnings.Clear();
 		AnimationWorkspace ws;

@@ -19,6 +19,7 @@
     <Compile Include="..\..\Editor\TextToAnimation\Mapping\**\*.cs" LinkBase="EditorCore\Mapping" />
     <Compile Include="..\..\Editor\TextToAnimation\Inference\**\*.cs" LinkBase="EditorCore\Inference" />
     <Compile Include="..\..\Editor\TextToAnimation\Generation\**\*.cs" LinkBase="EditorCore\Generation" />
+    <Compile Include="..\..\Editor\TextToAnimation\Engine\FbxSkin.cs" Link="EditorCore\Engine\FbxSkin.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />

@@ -151,8 +151,9 @@ public sealed class UniMateGenerator : IMotionGenerator
 			var output = Resample( frames, UniMateModel.Fps, request.OutputFps );
 			if ( request.CleanUp )
 			{
+				// UniMate's own clean-up (its Blender add-on): joins where prompts meet, collisions, ground contact
 				var outputSeams = seams.Select( f => (int)MathF.Round( f * request.OutputFps / UniMateModel.Fps ) ).ToList();
-				var cleaned = ClipCleanup.CleanGenerated( output, rig, request.OutputFps, outputSeams );
+				var cleaned = UniMateCleanup.Apply( output, rig, uniRig, outputSeams );
 				if ( cleaned.Length > 0 ) notes.Add( cleaned );
 			}
 			EnforceConstraints( output, request );

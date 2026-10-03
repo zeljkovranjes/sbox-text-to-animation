@@ -62,7 +62,7 @@ public class UniMateGeneratorTests
         var results = await generator.GenerateAsync(rig, new GenerationRequest
         {
             Mode = GenerationMode.TextToMotion, Prompts = new[] { "walk forward" }, DurationSeconds = 2f,
-            OutputFps = 30f, Seed = 3, Steps = 16,
+            OutputFps = 30f, Seed = 3, Steps = 16, CleanUp = false, // generation itself: the clean-up may turn a hand off the body (UpstreamCleanupTests)
         }, null, default);
         _out.WriteLine($"generated in {watch.ElapsedMilliseconds} ms");
         var motion = results.Single();

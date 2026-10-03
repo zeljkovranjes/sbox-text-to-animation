@@ -35,6 +35,21 @@ public sealed class PromptComposer : Widget
 	const float LineHeight = 17f;
 	const float SingleLine = 28f;
 
+	/// <summary>The composer's height with one line of text (what a layout reserves for it).</summary>
+	public const float SingleLineHeight = SingleLine;
+
+	/// <summary>Called when a line is added or removed and the composer's height changed.</summary>
+	public Action HeightChanged { get; set; }
+
+	/// <summary>Grown past one line it lies over the dock below it, so it covers that with the dock's own fill.</summary>
+	protected override void OnPaint()
+	{
+		if ( Height <= SingleLine + 1 ) return;
+		Paint.ClearPen();
+		Paint.SetBrush( Theme.ControlBackground );
+		Paint.DrawRect( LocalRect );
+	}
+
 	readonly Layout _leading;
 	readonly Field _field;
 	readonly PromptBox _box;
@@ -152,10 +167,12 @@ public sealed class PromptComposer : Widget
 	/// <summary>One line by default; grows with Shift+Enter lines up to three.</summary>
 	void Grow()
 	{
-		var lines = Math.Clamp( (Text.Count( c => c == '\n' ) + 1), 1, 3 );
+		var lines = Math.Clamp( (Text.Count( c => c is '\n' or (char)0x2028 or (char)0x2029 ) + 1), 1, 3 );
 		var height = SingleLine + (lines - 1) * LineHeight;
+		if ( MathF.Abs( Height - height ) < 0.5f && MathF.Abs( _field.Height - height ) < 0.5f ) return;
 		_field.FixedHeight = height;
 		FixedHeight = height;
+		HeightChanged?.Invoke();
 	}
 
 	void RefreshChips()
