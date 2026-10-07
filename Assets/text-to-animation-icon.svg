@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 128 128" fill="none">
+  <title>Text to Animation</title>
+  <desc>A white figure in mid-stride with blue joint markers and faint motion trails, rising from a prompt bar with a blinking caret, on a dark rounded square.</desc>
+  <rect width="128" height="128" rx="25" fill="#19191F"/>
+
+  <!-- Motion trails behind the back hand and the back foot. -->
+  <g stroke="#3A4A66" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="2 4">
+    <path d="M31 47A26 26 0 0 1 34 30"/>
+    <path d="M24 82A24 24 0 0 0 33 92"/>
+  </g>
+
+  <!-- Spine, shoulders, hips and limb chains. -->
+  <g stroke="#F4F4F5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M64 31L62 44L60 58"/>
+    <path d="M52 35L64 31L76 34"/>
+    <path d="M54 60L60 58L67 59"/>
+    <path d="M52 35L44 44L39 53"/>
+    <path d="M76 34L86 41L93 32"/>
+    <path d="M54 60L48 74L36 80"/>
+    <path d="M67 59L78 68L80 83L88 86"/>
+  </g>
+
+  <!-- Blue markers on the animated joints. -->
+  <g fill="#4C9BFF">
+    <circle cx="64" cy="31" r="2.8"/>
+    <circle cx="62" cy="44" r="2.6"/>
+    <circle cx="60" cy="58" r="2.8"/>
+    <circle cx="52" cy="35" r="2.8"/>
+    <circle cx="76" cy="34" r="2.8"/>
+    <circle cx="44" cy="44" r="2.6"/>
+    <circle cx="86" cy="41" r="2.6"/>
+    <circle cx="54" cy="60" r="2.8"/>
+    <circle cx="67" cy="59" r="2.8"/>
+    <circle cx="48" cy="74" r="2.6"/>
+    <circle cx="78" cy="68" r="2.6"/>
+    <circle cx="80" cy="83" r="2.6"/>
+  </g>
+  <g fill="#F4F4F5">
+    <circle cx="67" cy="20" r="6.5"/>
+    <circle cx="39" cy="53" r="3.1"/>
+    <circle cx="93" cy="32" r="3.1"/>
+    <circle cx="36" cy="80" r="3.1"/>
+    <circle cx="88" cy="86" r="3.1"/>
+  </g>
+
+  <!-- The prompt the motion comes from: a text field with words and a caret. -->
+  <rect x="20" y="100" width="88" height="16" rx="8" fill="#22242C" stroke="#343844" stroke-width="1"/>
+  <g stroke="#8A8F9C" stroke-width="2.2" stroke-linecap="round">
+    <path d="M29 108H50"/>
+    <path d="M55 108H68"/>
+  </g>
+  <path d="M74 103.5V112.5" stroke="#4C9BFF" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

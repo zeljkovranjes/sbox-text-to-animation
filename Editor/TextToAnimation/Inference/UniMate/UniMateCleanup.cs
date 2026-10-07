@@ -53,6 +53,11 @@ public static class UniMateCleanup
 		/// parity tests, which compare against the add-on as it is.
 		/// </summary>
 		public bool IgnoreRestOverlaps;
+		/// <summary>Adapter (the editor's): UniMate's paws glide while down - a stance is held where the foot is on average,
+		/// a leg with a thigh of its own is solved with it, and a paw no stance holds stands at each touch-down (PlanGait).</summary>
+		public bool GroundedStances;
+		/// <summary>Adapter: each foot's lowest rest-pose mesh point (its own and its children's), where it meets the ground.</summary>
+		public Dictionary<int, Vector3> Soles;
 		public int Count => Parents.Length;
 	}
 
@@ -72,8 +77,10 @@ public static class UniMateCleanup
 	/// (mesh vertices in the rig's rest space, per bone, rig.py mesh_capsules) and foot profiles (foot_profiles).
 	/// </summary>
 	public static Skeleton Build( IReadOnlyList<int> parents, IReadOnlyList<Vector3> heads, IReadOnlyList<string> names,
-		IReadOnlyList<string> labels, IReadOnlyDictionary<int, IReadOnlyList<Vector3>> points, int root, IReadOnlyList<Quaternion> restRot = null )
+		IReadOnlyList<string> labels, IReadOnlyDictionary<int, IReadOnlyList<Vector3>> points, int root, IReadOnlyList<Quaternion> restRot = null,
+		IEnumerable<int> feet = null )
 	{
+		var extraFeet = feet?.ToHashSet() ?? new HashSet<int>();
 		var n = parents.Count;
 		var s = new Skeleton
 		{
@@ -110,12 +117,29 @@ public static class UniMateCleanup
 				if ( low > high ) low = high = (axial.Min() + axial.Max()) * .5f;
 				s.Capsules.Add( new Capsule( j, head + direction * low, head + direction * high, radius ) );
 			}
+		// the lowest rest point of each bone's mesh with its children's (a paw and its toes)
+		if ( points is not null )
+		{
+			s.Soles = new Dictionary<int, Vector3>();
+			for ( var j = 0; j < n; j++ )
+			{
+				var own = new List<Vector3>();
+				for ( var k = 0; k < n; k++ )
+				{
+					var a = k; while ( a >= 0 && a != j ) a = s.Parents[a];
+					if ( a == j && points.TryGetValue( k, out var pts ) ) own.AddRange( pts );
+				}
+				if ( own.Count > 0 ) s.Soles[j] = own.OrderBy( v => v.Z ).First();
+			}
+		}
 		// foot_profiles: terminal support bones by their label
 		for ( var j = 0; j < n; j++ )
 		{
 			if ( s.Names[j] is null || s.Parents[j] < 0 ) continue;
 			var words = SemanticName( s.Labels[j] ).Split( ' ' );
-			if ( !words.Contains( "foot" ) && !words.Contains( "paw" ) ) continue;
+			// adapter: every leg the rig analysis finds stands on its end bone (a quadruped's front paws are labelled
+			// "Hand", as in UniMate's own data, and the add-on would leave them sliding)
+			if ( !words.Contains( "foot" ) && !words.Contains( "paw" ) && !extraFeet.Contains( j ) ) continue;
 			var parent = s.Parents[j];
 			var upper = s.Parents[parent];
 			if ( upper < 0 ) continue;
@@ -127,6 +151,13 @@ public static class UniMateCleanup
 				Joint = j, Parent = parent, Upper = upper, StanceTilt = stance, SwingTilt = MathF.Max( stance + 15, 45 ),
 				LegLength = (s.Heads[parent] - s.Heads[upper]).Length() + (s.Heads[j] - s.Heads[parent]).Length(),
 			} );
+		}
+		// one foot per leg: a profiled bone with another profiled bone below it (a hock above its paw) is the leg, not
+		// the foot - both standing would pull one chain two ways
+		if ( extraFeet.Count > 0 || s.Soles is not null )
+		{
+			bool Below( int j, int ancestor ) { for ( var a = s.Parents[j]; a >= 0; a = s.Parents[a] ) if ( a == ancestor ) return true; return false; }
+			s.Profiles = s.Profiles.Where( p => !s.Profiles.Any( q => q != p && Below( q.Joint, p.Joint ) ) ).ToList();
 		}
 		return s;
 	}
@@ -449,7 +480,17 @@ public static class UniMateCleanup
 
 	// ------------------------------------------------------------------ ground contact (ground.py)
 
-	sealed class Foot { public FootProfile Profile; public Vector3 Offset; public float Radius; }
+	sealed class Foot
+	{
+		public FootProfile Profile; public Vector3 Offset; public float Radius;
+		/// <summary>GroundedStances: the thigh above a four-bone leg (a fox's hind leg: thigh, shin, hock, paw), turned with
+		/// the add-on's three joints - its "upper" is the knee there - or -1.</summary>
+		public int Hip = -1;
+		/// <summary>The leg's length from its top joint to the end bone's head.</summary>
+		public float Chain;
+		public int Top => Hip >= 0 ? Hip : Profile.Upper;
+		public IEnumerable<int> Joints => Hip >= 0 ? new[] { Profile.Joint, Profile.Parent, Profile.Upper, Hip } : new[] { Profile.Joint, Profile.Parent, Profile.Upper };
+	}
 
 	static Vector3 Sole( Vector3 pos, Quaternion rot, Foot foot, Vector3 normal ) => pos + Mul( rot, foot.Offset ) - normal * foot.Radius;
 
@@ -498,19 +539,37 @@ public static class UniMateCleanup
 	}
 
 	/// <summary>ground.py plant: lift intrusions, find stances, limit foot tilt, hold planted soles, keep knee sides.</summary>
-	public static string Plant( Motion m, Skeleton s )
+	public static string Plant( Motion m, Skeleton s, Motion reference = null )
 	{
 		var caps = s.Capsules.ToDictionary( c => c.Joint );
-		var feet = s.Profiles.Where( p => caps.ContainsKey( p.Joint ) ).Select( p => new Foot
-		{
-			Profile = p, Offset = caps[p.Joint].B - s.Heads[p.Joint], Radius = caps[p.Joint].Radius,
-		} ).ToList();
+		// adapter: with the mesh at hand a foot touches the ground at its own lowest point (a fat foot capsule's bottom
+		// lies well below the real sole, so the add-on's ground sat under the floor and most stances were out of reach)
+		var feet = s.Profiles.Where( p => caps.ContainsKey( p.Joint ) || s.Soles?.ContainsKey( p.Joint ) == true ).Select( p =>
+			s.Soles is not null && s.Soles.TryGetValue( p.Joint, out var sole )
+				? new Foot { Profile = p, Offset = sole - s.Heads[p.Joint], Radius = 0 }
+				: new Foot { Profile = p, Offset = caps[p.Joint].B - s.Heads[p.Joint], Radius = caps[p.Joint].Radius } ).ToList();
 		if ( feet.Count == 0 ) return "no foot or paw bones to plant";
+		foreach ( var foot in feet )
+		{
+			foot.Chain = foot.Profile.LegLength;
+			if ( !s.GroundedStances ) continue;
+			// a joint above the leg that is this leg's alone (not the pelvis or spine every leg hangs from)
+			var up = s.Parents[foot.Profile.Upper];
+			bool Above( int j, int ancestor ) { for ( var a = s.Parents[j]; a >= 0; a = s.Parents[a] ) if ( a == ancestor ) return true; return false; }
+			if ( up < 0 || s.Parents[up] < 0 || feet.Any( o => o != foot && Above( o.Profile.Joint, up ) ) ) continue;
+			foot.Hip = up;
+			foot.Chain += (s.Heads[foot.Profile.Upper] - s.Heads[up]).Length();
+		}
 		var normal = Vector3.UnitZ;
-		var height = feet.Min( f => MathF.Min( caps[f.Profile.Joint].A.Z, caps[f.Profile.Joint].B.Z ) - caps[f.Profile.Joint].Radius );
+		var height = feet.Min( f => f.Radius == 0 ? s.Heads[f.Profile.Joint].Z + f.Offset.Z
+			: MathF.Min( caps[f.Profile.Joint].A.Z, caps[f.Profile.Joint].B.Z ) - caps[f.Profile.Joint].Radius );
 		int n = m.Frames;
 
-		float[] Heights( int f ) => Enumerable.Range( 0, n ).Select( t => Vector3.Dot( Sole( m.Pos[t][feet[f].Profile.Joint], m.Rot[t][feet[f].Profile.Joint], feet[f], normal ), normal ) - height ).ToArray();
+		float[] HeightsOf( Motion x, int f ) => Enumerable.Range( 0, n ).Select( t => Vector3.Dot( Sole( x.Pos[t][feet[f].Profile.Joint], x.Rot[t][feet[f].Profile.Joint], feet[f], normal ), normal ) - height ).ToArray();
+		float[] Heights( int f ) => HeightsOf( m, f );
+		// adapter: stances are found, and anchored, on the motion as the model made it when the port has smoothed it
+		// (smoothing smears a planted foot into a glide)
+		var found = reference ?? m;
 
 		// Lift deep penetrations gradually so the IK can preserve the supplied root path.
 		var intrusion = new float[n];
@@ -525,25 +584,31 @@ public static class UniMateCleanup
 
 		// stance_windows
 		var windows = new List<List<(int Start, int End)>>();
+		var lifts = new float[feet.Count][];
+		var rootSpeed = Enumerable.Range( 0, n ).Select( t => t == 0 ? 0f : new Vector3( m.Pos[t][0].X - m.Pos[t - 1][0].X, m.Pos[t][0].Y - m.Pos[t - 1][0].Y, 0 ).Length() ).ToArray();
+		if ( n > 1 ) rootSpeed[0] = rootSpeed[1];
+		var bodySpeed = UniformNearest( rootSpeed, 5 );
 		for ( var f = 0; f < feet.Count; f++ )
 		{
 			var leg = feet[f].Profile.LegLength;
-			var sole = Enumerable.Range( 0, n ).Select( t => Sole( m.Pos[t][feet[f].Profile.Joint], m.Rot[t][feet[f].Profile.Joint], feet[f], normal ) ).ToArray();
-			var h = Heights( f );
+			var sole = Enumerable.Range( 0, n ).Select( t => Sole( found.Pos[t][feet[f].Profile.Joint], found.Rot[t][feet[f].Profile.Joint], feet[f], normal ) ).ToArray();
+			var h = HeightsOf( found, f );
 			var rawVelocity = Enumerable.Range( 0, n ).Select( t => t == 0 ? 0f : (sole[t] - sole[t - 1]).Length() ).ToArray();
 			var velocity = UniformNearest( rawVelocity, 3 );
 			var smooth = UniformNearest( h, 3 );
 			var vertical = Enumerable.Range( 0, n ).Select( t => t == 0 ? 0f : MathF.Abs( h[t] - h[t - 1] ) ).ToArray();
-			var mask = Enumerable.Range( 0, n ).Select( t => smooth[t] < MathF.Max( .025f, .16f * leg )
-				&& velocity[t] < .08f * leg && rawVelocity[t] < .10f * leg && vertical[t] < .08f * leg ).ToArray();
+			var mask = Enumerable.Range( 0, n ).Select( t => smooth[t] < MathF.Max( .025f, .16f * leg ) && vertical[t] < .08f * leg && velocity[t] < .08f * leg && rawVelocity[t] < .10f * leg ).ToArray();
 			windows.Add( Runs( mask ) );
+			lifts[f] = UniformNearest( Heights( f ), 3 );
 		}
 
 		StabilizeFeet( m, s, feet, normal, windows );
 		var source = m.Pos.Select( p => p.ToArray() ).ToArray();
-		var active = SolveContacts( m, s, feet, normal, height, windows );
+		OutOfReach = 0;
+		var active = SolveContacts( m, s, feet, normal, height, windows, found, lifts, bodySpeed );
+		var stanceFrames = windows.Sum( w => w.Sum( x => x.End - x.Start ) );
 		var bends = PreserveBend( m, s, feet, source );
-		return $"ground: {feet.Count} feet, {windows.Sum( w => w.Count )} stances, {active} planted frames";
+		return $"ground: {feet.Count} feet, {windows.Sum( w => w.Count )} stances ({stanceFrames} foot-frames, {OutOfReach} out of reach), {active} planted frames";
 	}
 
 	static void StabilizeFeet( Motion m, Skeleton s, List<Foot> feet, Vector3 normal, List<List<(int Start, int End)>> windows )
@@ -608,7 +673,132 @@ public static class UniMateCleanup
 		}
 	}
 
-	static int SolveContacts( Motion m, Skeleton s, List<Foot> feet, Vector3 normal, float height, List<List<(int Start, int End)>> windows )
+	/// <summary>
+	/// The port's gait planner (GroundedStances): UniMate's paws glide - a fox's never stop while its body travels, its
+	/// legs barely sweeping. At each touch-down of such a paw (the lowest point of its path) it eases off its own path
+	/// onto the spot where the model puts it down, stands there while its leg reaches, and eases back onto its path for
+	/// the swing: the model's own footfalls and cadence, with a stance in each stride and the speed continuous throughout.
+	/// The body is lowered a little where the legs are too straight to stand at all. Per foot and frame: the target, or
+	/// none (the add-on's stance windows then apply).
+	/// </summary>
+	static (Vector3?[] Target, float[] Weight)[] PlanGait( Vector3[][] sole, Vector3[][] made, Vector3[][] hip, float[][] lift, bool[][] held, List<Foot> feet, Vector3 normal, float height, float[] bodySpeed, out float[] drop )
+	{
+		const int Blend = 3, Stand = 3; // at most: frames easing on and off, frames standing either side of the touch-down
+		var n = sole[0].Length;
+		Vector3 Flat( Vector3 v ) => v - normal * Vector3.Dot( v, normal );
+		Vector3 Grounded( Vector3 p ) { var z = Vector3.Dot( p, normal ); return z < height ? p + normal * (height - z) : p; }
+		float Reach( int f ) => .97f * (feet[f].Chain + feet[f].Offset.Length());
+		var downs = new List<(int Foot, int Time, Vector3 Spot)>();
+		for ( var f = 0; f < feet.Count; f++ )
+		{
+			var leg = feet[f].Profile.LegLength;
+			var h = lift[f];
+			// touch-downs: the lowest point of the path within a third of a second either way, in its lower part
+			var floor = Enumerable.Range( 0, n ).Select( t => Enumerable.Range( Math.Max( 0, t - 15 ), Math.Min( n, t + 16 ) - Math.Max( 0, t - 15 ) ).Min( u => h[u] ) ).ToArray();
+			var times = Enumerable.Range( 0, n ).Where( t => h[t] <= floor[t] + .15f * leg
+				&& Enumerable.Range( Math.Max( 0, t - 5 ), Math.Min( n, t + 6 ) - Math.Max( 0, t - 5 ) ).All( u => h[u] > h[t] || (h[u] == h[t] && u >= t) ) ).ToList();
+			// (as the model made it: smoothing smears a standing foot into a glide)
+			float Speed( int t ) => t == 0 ? Flat( made[f][1] - made[f][0] ).Length() : Flat( made[f][t] - made[f][t - 1] ).Length();
+			// a paw that glides: it never stands (its three slowest frames over the stride around) while the body travels
+			foreach ( var t0 in times )
+			{
+				if ( held[f][t0] ) continue; // the add-on's stance holds it
+				int a = Math.Max( 0, t0 - 10 ), b = Math.Min( n - 1, t0 + 10 );
+				if ( Enumerable.Range( a, b - a + 1 ).Average( t => bodySpeed[t] ) <= .02f * leg ) continue;
+				if ( Enumerable.Range( a, b - a + 1 ).Select( t => Speed( t ) / MathF.Max( bodySpeed[t], 1e-6f ) ).OrderBy( x => x ).Take( 3 ).Average() <= .3f ) continue;
+				var z = Vector3.Dot( sole[f][t0], normal );
+				downs.Add( (f, t0, sole[f][t0] + normal * (MathF.Max( z, height ) - z)) );
+			}
+		}
+		// legs too straight to stand: the body lowered (by a quarter of the shortest leg at most) as far as the spots need
+		var minLeg = feet.Min( f => f.Profile.LegLength );
+		var need = new float[n];
+		foreach ( var (f, t0, spot) in downs )
+			for ( var t = Math.Max( 0, t0 - Stand - Blend ); t <= Math.Min( n - 1, t0 + Stand + Blend ); t++ )
+			{
+				var across = Flat( spot - hip[f][t] ).Length();
+				var up = Vector3.Dot( hip[f][t] - spot, normal );
+				var reach = Reach( f ) * .98f;
+				var d = across < reach ? up - MathF.Sqrt( reach * reach - across * across ) : up;
+				need[t] = MathF.Max( need[t], Math.Clamp( d, 0, minLeg / 4f ) );
+			}
+		var lowered = GaussianNearest( MaximumNearest( need, 9 ), 3 );
+		drop = lowered;
+		var plans = new (Vector3?[] Target, float[] Weight)[feet.Count];
+		for ( var f = 0; f < feet.Count; f++ )
+		{
+			plans[f] = (new Vector3?[n], new float[n]);
+			// a lowered body: every paw kept where it was (on the ground at least), or held by its stance
+			for ( var t = 0; t < n; t++ )
+				if ( lowered[t] > 1e-4f * minLeg && !held[f][t] ) { plans[f].Target[t] = Grounded( sole[f][t] ); plans[f].Weight[t] = 1f; }
+		}
+		var stood = new List<(int Foot, int Start, int End)>();
+		foreach ( var (f, t0, spot) in downs )
+		{
+			bool Reaches( int t ) => t < 0 || t >= n || (spot - (hip[f][t] - normal * lowered[t])).Length() <= Reach( f );
+			// standing as long as the leg reaches the spot, easing on and off while it does (a galloping paw stands for a
+			// tenth of a second)
+			var fit = new[] { (3, 3), (2, 3), (1, 3), (2, 2), (1, 2), (0, 2) }.Select( x => ((int Stand, int Blend)?)x )
+				.FirstOrDefault( x => Enumerable.Range( t0 - x.Value.Stand - x.Value.Blend, 2 * (x.Value.Stand + x.Value.Blend) + 1 ).All( Reaches ) );
+			if ( fit is not { } window ) continue;
+			stood.Add( (f, t0 - window.Stand - window.Blend, t0 + window.Stand + window.Blend) );
+			var (target, weight) = plans[f];
+			for ( var t = Math.Max( 0, t0 - window.Stand - window.Blend ); t <= Math.Min( n - 1, t0 + window.Stand + window.Blend ); t++ )
+			{
+				var off = Math.Abs( t - t0 ) - window.Stand;
+				var on = off <= 0 ? 1f : Ease( 1f - off / (float)window.Blend );
+				var own = target[t] ?? Grounded( sole[f][t] );
+				// descending onto the spot and rising off it: on the ground only while it stands
+				var air = .1f * feet[f].Profile.LegLength * (1f - on);
+				var blended = Vector3.Lerp( own, spot, on );
+				var under = height + air - Vector3.Dot( blended, normal );
+				target[t] = under > 0 ? blended + normal * under : blended;
+				weight[t] = 1f;
+			}
+		}
+		// between one stance and the next the paw is in the air - it touches down where it stands, not along the way
+		foreach ( var group in stood.GroupBy( x => x.Foot ) )
+		{
+			var f = group.Key;
+			var clearance = .1f * feet[f].Profile.LegLength;
+			var (target, weight) = plans[f];
+			var list = group.OrderBy( x => x.Start ).ToList();
+			for ( var i = 0; i + 1 < list.Count; i++ )
+			{
+				int a = list[i].End, b = list[i + 1].Start;
+				if ( b - a < 2 ) continue;
+				for ( var t = a + 1; t < b; t++ )
+				{
+					// lifted off within a tenth of a second of either stance
+					var arc = Ease( MathF.Min( 1f, (t - a) / 3f ) ) * Ease( MathF.Min( 1f, (b - t) / 3f ) );
+					var own = target[t] ?? Grounded( sole[f][t] );
+					var clear = height + clearance * arc - Vector3.Dot( own, normal );
+					target[t] = clear > 0 ? own + normal * clear : own;
+					weight[t] = 1f;
+				}
+			}
+		}
+		// the planned paths low-passed a little (a frame's sigma), so a paw lands and lifts off without a jolt
+		const float Sigma = 1.5f;
+		for ( var f = 0; f < feet.Count; f++ )
+		{
+			var (target, _) = plans[f];
+			foreach ( var (a, b) in Runs( target.Select( x => x.HasValue ).ToArray() ) )
+			{
+				var xs = GaussianNearest( Enumerable.Range( a, b - a ).Select( t => target[t].Value.X ).ToArray(), Sigma );
+				var ys = GaussianNearest( Enumerable.Range( a, b - a ).Select( t => target[t].Value.Y ).ToArray(), Sigma );
+				var zs = GaussianNearest( Enumerable.Range( a, b - a ).Select( t => target[t].Value.Z ).ToArray(), Sigma );
+				for ( var t = a; t < b; t++ ) target[t] = new Vector3( xs[t - a], ys[t - a], zs[t - a] );
+			}
+		}
+		return plans;
+	}
+
+	/// <summary>Stance frames whose anchor was out of the leg's reach in the last clean-up (diagnostics).</summary>
+	[ThreadStatic] public static int OutOfReach;
+
+	static int SolveContacts( Motion m, Skeleton s, List<Foot> feet, Vector3 normal, float height, List<List<(int Start, int End)>> windows, Motion found,
+		float[][] lifts, float[] bodySpeed )
 	{
 		var n = m.Frames;
 		// anchors_for: the sole where each stance starts, on the ground
@@ -616,9 +806,36 @@ public static class UniMateCleanup
 		for ( var f = 0; f < feet.Count; f++ )
 			foreach ( var (start, end) in windows[f] )
 			{
-				var b = Sole( m.Pos[start][feet[f].Profile.Joint], m.Rot[start][feet[f].Profile.Joint], feet[f], normal );
+				// the add-on anchors where the stance starts; a gliding foot (GroundedStances) is anchored where it is on
+				// average, so the leg is turned by half as much at either end
+				var b = Sole( found.Pos[start][feet[f].Profile.Joint], found.Rot[start][feet[f].Profile.Joint], feet[f], normal );
+				if ( s.GroundedStances )
+				{
+					b = Vector3.Zero;
+					for ( var t = start; t < end; t++ ) b += Sole( found.Pos[t][feet[f].Profile.Joint], found.Rot[t][feet[f].Profile.Joint], feet[f], normal );
+					b /= end - start;
+				}
 				anchors[(f, start, end)] = b + normal * (height - Vector3.Dot( b, normal ));
 			}
+		(Vector3?[] Target, float[] Weight)[] plan = null;
+		if ( s.GroundedStances )
+		{
+			var soles = feet.Select( foot => Enumerable.Range( 0, n ).Select( t => Sole( m.Pos[t][foot.Profile.Joint], m.Rot[t][foot.Profile.Joint], foot, normal ) ).ToArray() ).ToArray();
+			var hips = feet.Select( foot => Enumerable.Range( 0, n ).Select( t => m.Pos[t][foot.Top] ).ToArray() ).ToArray();
+			var made = feet.Select( foot => Enumerable.Range( 0, n ).Select( t => Sole( found.Pos[t][foot.Profile.Joint], found.Rot[t][foot.Profile.Joint], foot, normal ) ).ToArray() ).ToArray();
+			// the add-on's stances whose anchor the leg reaches throughout
+			var held = feet.Select( _ => new bool[n] ).ToArray();
+			for ( var f = 0; f < feet.Count; f++ )
+				foreach ( var (start, end) in windows[f] )
+				{
+					var anchor = anchors[(f, start, end)];
+					if ( Enumerable.Range( start, end - start ).All( t => (anchor - m.Pos[t][feet[f].Profile.Upper]).Length() <= feet[f].Profile.LegLength + feet[f].Offset.Length() * 1.1f ) )
+						for ( var t = start; t < end; t++ ) held[f][t] = true;
+				}
+			plan = PlanGait( soles, made, hips, lifts, held, feet, normal, height, bodySpeed, out var drop );
+			for ( var t = 0; t < n; t++ )
+				for ( var j = 0; j < s.Count; j++ ) m.Pos[t][j] -= normal * drop[t];
+		}
 		var original = m.Rot.Select( r => r.ToArray() ).ToArray();
 		var local = ToLocal( m.Rot, s.Parents );
 		var startPoints = m.Pos.Select( p => p.ToArray() ).ToArray();
@@ -628,14 +845,35 @@ public static class UniMateCleanup
 		for ( var t = 0; t < n; t++ )
 		{
 			var constraints = new List<(int Foot, Vector3 Anchor, float Weight)>();
+			var planned = new bool[feet.Count];
+			for ( var f = 0; f < feet.Count && plan is not null; f++ )
+			{
+				if ( plan[f].Target[t] is not { } goal || plan[f].Weight[t] <= 0 ) continue;
+				planned[f] = true;
+				var leg = feet[f].Profile.LegLength;
+				var hip = startPoints[t][feet[f].Top];
+				// out of the leg's reach: as near as it reaches (the paw gives way smoothly rather than snapping free)
+				var limit = feet[f].Chain + feet[f].Offset.Length() * 1.1f;
+				if ( (goal - hip).Length() > limit ) { OutOfReach++; goal = hip + (goal - hip) * (limit / (goal - hip).Length()); }
+				if ( t > 0 )
+				{
+					var previous = Sole( outP[t - 1][feet[f].Profile.Joint], outR[t - 1][feet[f].Profile.Joint], feet[f], normal );
+					var approach = goal - previous;
+					var length = approach.Length();
+					var maxMove = .6f * leg; // a planned paw moves faster than the add-on's settling of a plant
+					if ( length > maxMove ) goal = previous + approach * (maxMove / length);
+				}
+				constraints.Add( (f, goal, plan[f].Weight[t]) );
+			}
 			for ( var f = 0; f < feet.Count; f++ )
 				foreach ( var (start, end) in windows[f] )
 				{
+					if ( planned[f] ) break;
 					if ( !(start <= t && t < end) ) continue;
 					var leg = feet[f].Profile.LegLength;
 					var anchor = anchors[(f, start, end)];
 					var hip = startPoints[t][feet[f].Profile.Upper];
-					if ( (anchor - hip).Length() > leg + feet[f].Offset.Length() * 1.1f ) continue;
+					if ( (anchor - hip).Length() > leg + feet[f].Offset.Length() * 1.1f ) { OutOfReach++; continue; }
 					var weight = MathF.Min( 1f, MathF.Min( (t - start + 1) / 4f, (end - t) / 4f ) );
 					if ( t > 0 )
 					{
@@ -651,7 +889,7 @@ public static class UniMateCleanup
 			if ( constraints.Count > 0 ) active++;
 			var jointWeights = Enumerable.Repeat( .88f, s.Count ).ToArray();
 			foreach ( var (f, _, weight) in constraints )
-				foreach ( var joint in new[] { feet[f].Profile.Joint, feet[f].Profile.Parent, feet[f].Profile.Upper } )
+				foreach ( var joint in feet[f].Joints )
 					jointWeights[joint] = MathF.Max( jointWeights[joint], weight );
 			var poseLocal = new Quaternion[s.Count];
 			for ( var j = 0; j < s.Count; j++ ) poseLocal[j] = FromRotvec( ToRotvec( previousCorrection[j] ) * jointWeights[j] ) * local[t][j];
@@ -675,7 +913,7 @@ public static class UniMateCleanup
 			}
 			for ( var iteration = 0; iteration < (constraints.Count > 0 ? 20 : 0); iteration++ )
 			{
-				var joints = constraints.SelectMany( c => new[] { feet[c.Foot].Profile.Joint, feet[c.Foot].Profile.Parent, feet[c.Foot].Profile.Upper } ).Distinct().OrderBy( j => j ).ToList();
+				var joints = constraints.SelectMany( c => feet[c.Foot].Joints ).Distinct().OrderBy( j => j ).ToList();
 				var columns = joints.Select( ( j, k ) => (j, k) ).ToDictionary( x => x.j, x => 3 * x.k );
 				var rows = 3 * constraints.Count; var cols = 3 * joints.Count + 3;
 				var matrix = new double[rows, cols];
@@ -687,7 +925,7 @@ public static class UniMateCleanup
 					var point = Sole( pos[feet[f].Profile.Joint], rot[feet[f].Profile.Joint], feet[f], normal );
 					var e = (target - point) * weight;
 					error[c * 3] = e.X; error[c * 3 + 1] = e.Y; error[c * 3 + 2] = e.Z;
-					foreach ( var (joint, gain) in new[] { (feet[f].Profile.Joint, .25f), (feet[f].Profile.Parent, .7f), (feet[f].Profile.Upper, 1f) } )
+					foreach ( var (joint, gain) in feet[f].Joints.Zip( new[] { .25f, .7f, 1f, 1f } ) )
 					{
 						// -skew(r) * gain: the change of the point for a rotation omega is omega x r = -skew(r) omega
 						var r = point - pos[joint];
@@ -889,9 +1127,11 @@ public static class UniMateCleanup
 		var s = Build( order.Select( e => ParentOf( e ) is var p && p >= 0 ? index[p] : -1 ).ToArray(), order.Select( e => (Vector3)sk.RestWorld[e].Pos ).ToArray(),
 			order.Select( e => names[e] ).ToArray(), order.Select( e => labels[e] ).ToArray(),
 			points?.Where( kv => index.ContainsKey( kv.Key ) ).ToDictionary( kv => index[kv.Key], kv => kv.Value ), 0,
-			order.Select( e => (Quaternion)sk.RestWorld[e].Rot ).ToArray() );
+			order.Select( e => (Quaternion)sk.RestWorld[e].Rot ).ToArray(),
+			rig.Feet.Select( f => f.Ankle ).Where( index.ContainsKey ).Select( b => index[b] ) );
 		s.Engine = order.ToArray();
 		s.IgnoreRestOverlaps = true;
+		s.GroundedStances = true;
 		return s;
 	}
 
@@ -970,10 +1210,13 @@ public static class UniMateCleanup
 		if ( Invalid( "reading the clip" ) is { } bad ) return bad;
 		if ( joins is { Count: > 0 } ) Joins( m, s, joins, transitionFrames );
 		if ( Invalid( "the prompt joins" ) is { } badJoins ) return badJoins;
+		// the port's addition: the model's frame-to-frame jitter low-passed before the clean-up corrects contacts
+		var made = Copy( m );
+		SmoothMotion( m, s, MotionSigma );
 		var overlapBefore = Overlap( m, s );
 		Collisions( m, s );
 		if ( Invalid( "the collisions" ) is { } badFirst ) return badFirst;
-		var ground = Plant( m, s );
+		var ground = Plant( m, s, made );
 		if ( Invalid( "the ground contact" ) is { } badGround ) return badGround;
 		Collisions( m, s );
 		if ( Invalid( "the second collision pass" ) is { } badSecond ) return badSecond;
@@ -991,8 +1234,130 @@ public static class UniMateCleanup
 		return "UniMate clean-up: " + string.Join( "; ", parts ) + ".";
 	}
 
+	// ------------------------------------------------------------------ smoothing (the port's addition: the add-on has none)
+
+	static float[] GaussianWeights( float sigma, out int radius )
+	{
+		radius = Math.Max( 1, (int)MathF.Ceiling( 3f * sigma ) );
+		var r = radius;
+		var w = Enumerable.Range( -r, 2 * r + 1 ).Select( k => MathF.Exp( -.5f * k * k / (sigma * sigma) ) ).ToArray();
+		var total = w.Sum();
+		return w.Select( x => x / total ).ToArray();
+	}
+
+	/// <summary>A Gaussian average of rotations (one hemisphere, normalised): small-angle exact enough for frame neighbours.</summary>
+	static Quaternion Average( IReadOnlyList<Quaternion> q, float[] w )
+	{
+		var reference = q[q.Count / 2];
+		var sum = System.Numerics.Vector4.Zero;
+		for ( var k = 0; k < q.Count; k++ )
+		{
+			var v = new System.Numerics.Vector4( q[k].X, q[k].Y, q[k].Z, q[k].W );
+			if ( Quaternion.Dot( q[k], reference ) < 0 ) v = -v;
+			sum += v * w[k];
+		}
+		return Quaternion.Normalize( new Quaternion( sum.X, sum.Y, sum.Z, sum.W ) );
+	}
+
+	/// <summary>
+	/// Low-pass of the motion itself: each joint's local rotation and each root's position averaged over neighbouring
+	/// frames (Gaussian, edges held). Removes the model's frame-to-frame jitter before the clean-up corrects contacts.
+	/// </summary>
+	public static void SmoothMotion( Motion m, Skeleton s, float sigma )
+	{
+		if ( sigma <= 0 || m.Frames < 3 ) return;
+		var w = GaussianWeights( sigma, out var r );
+		var local = ToLocal( m.Rot, s.Parents );
+		var n = m.Frames;
+		var outLocal = new Quaternion[n][];
+		var roots = new Vector3[n][];
+		for ( var t = 0; t < n; t++ )
+		{
+			outLocal[t] = new Quaternion[s.Count];
+			roots[t] = new Vector3[s.Count];
+			for ( var j = 0; j < s.Count; j++ )
+			{
+				var window = Enumerable.Range( -r, 2 * r + 1 ).Select( k => local[Math.Clamp( t + k, 0, n - 1 )][j] ).ToList();
+				outLocal[t][j] = Average( window, w );
+				if ( s.Parents[j] < 0 )
+				{
+					var p = Vector3.Zero;
+					for ( var k = -r; k <= r; k++ ) p += m.Pos[Math.Clamp( t + k, 0, n - 1 )][j] * w[k + r];
+					roots[t][j] = p;
+				}
+			}
+		}
+		for ( var t = 0; t < n; t++ ) (m.Pos[t], m.Rot[t]) = Fk( roots[t], outLocal[t], m.Offset[t], s.Parents );
+	}
+
+	/// <summary>
+	/// Low-pass of what a clean-up changed: per joint the local correction (after * before^-1) and per root the
+	/// position correction, averaged over neighbouring frames and applied back to <paramref name="before"/>. A frame-
+	/// by-frame solver's corrections twitch; their average keeps what they fix (limbs apart, feet down) without the twitch.
+	/// </summary>
+	public static void SmoothCorrections( Motion before, Motion after, Skeleton s, float sigma )
+	{
+		if ( sigma <= 0 || after.Frames < 3 ) return;
+		var w = GaussianWeights( sigma, out var r );
+		var lb = ToLocal( before.Rot, s.Parents );
+		var la = ToLocal( after.Rot, s.Parents );
+		var n = after.Frames;
+		var correction = new Vector3[n][];
+		var shift = new Vector3[n][];
+		for ( var t = 0; t < n; t++ )
+		{
+			correction[t] = new Vector3[s.Count];
+			shift[t] = new Vector3[s.Count];
+			for ( var j = 0; j < s.Count; j++ )
+			{
+				correction[t][j] = ToRotvec( la[t][j] * T( lb[t][j] ) );
+				if ( s.Parents[j] < 0 ) shift[t][j] = after.Pos[t][j] - before.Pos[t][j];
+			}
+		}
+		for ( var t = 0; t < n; t++ )
+		{
+			var local = new Quaternion[s.Count];
+			var roots = new Vector3[s.Count];
+			for ( var j = 0; j < s.Count; j++ )
+			{
+				Vector3 c = Vector3.Zero, d = Vector3.Zero;
+				for ( var k = -r; k <= r; k++ )
+				{
+					var f = Math.Clamp( t + k, 0, n - 1 );
+					c += correction[f][j] * w[k + r];
+					d += shift[f][j] * w[k + r];
+				}
+				local[j] = Quaternion.Normalize( FromRotvec( c ) * lb[t][j] );
+				if ( s.Parents[j] < 0 ) roots[j] = before.Pos[t][j] + d;
+			}
+			(after.Pos[t], after.Rot[t]) = Fk( roots, local, before.Offset[t], s.Parents );
+		}
+	}
+
+	/// <summary>
+	/// The editor's clean-up: the model's jitter low-passed (<paramref name="motionSigma"/> frames), UniMate's own
+	/// clean-up, then its frame-by-frame corrections low-passed (<paramref name="correctionSigma"/> frames).
+	/// </summary>
+	public static string Smoothed( Motion m, Skeleton s, float motionSigma = MotionSigma, float correctionSigma = CorrectionSigma )
+	{
+		var made = Copy( m );
+		SmoothMotion( m, s, motionSigma );
+		var before = Copy( m );
+		var report = Clean( m, s, motionSigma > 0 ? made : null );
+		SmoothCorrections( before, m, s, correctionSigma );
+		return report;
+	}
+
+	/// <summary>Measured (SmoothnessTests): smoothing the motion halves jerk and keeps every fix; smoothing the corrections brings overlaps back.</summary>
+	public const float MotionSigma = 2.5f, CorrectionSigma = 0f;
+
+	public static Motion Copy( Motion m ) => new()
+	{
+		Pos = m.Pos.Select( f => f.ToArray() ).ToArray(), Rot = m.Rot.Select( f => f.ToArray() ).ToArray(), Offset = m.Offset.Select( f => f.ToArray() ).ToArray(),
+	};
+
 	/// <summary>The deepest capsule overlap over the clip (0 without shapes).</summary>
-	static float Overlap( Motion m, Skeleton s )
+	public static float Overlap( Motion m, Skeleton s )
 	{
 		if ( s.Capsules.Count == 0 ) return 0;
 		var rig = new CapsuleRig( s );
@@ -1009,10 +1374,10 @@ public static class UniMateCleanup
 	}
 
 	/// <summary>collision.py cleanup: collisions, ground contact, collisions again.</summary>
-	public static string Clean( Motion m, Skeleton s )
+	public static string Clean( Motion m, Skeleton s, Motion reference = null )
 	{
 		var first = Collisions( m, s );
-		var ground = Plant( m, s );
+		var ground = Plant( m, s, reference );
 		var second = Collisions( m, s );
 		return $"{first}; {ground}; {second}";
 	}

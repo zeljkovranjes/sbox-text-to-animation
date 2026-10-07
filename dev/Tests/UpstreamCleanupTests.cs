@@ -86,25 +86,24 @@ public class UpstreamCleanupTests
                 return new[] { new[] { x.X, y.X, z.X, h.X }, new[] { x.Y, y.Y, z.Y, h.Y }, new[] { x.Z, y.Z, z.Z, h.Z }, new[] { 0f, 0f, 0f, 1f } };
             }),
             collision_capsules = s.Capsules.Select(c => new { joint = c.Joint, a = V(c.A), b = V(c.B), radius = c.Radius }),
+            soles = s.Soles?.ToDictionary(kv => kv.Key.ToString(), kv => V(kv.Value)),
             foot_profiles = s.Profiles.Select(p => new { joint = p.Joint, parent = p.Parent, upper = p.Upper, leg_length = p.LegLength, stance_tilt = p.StanceTilt, swing_tilt = p.SwingTilt }),
             ground = new { normal = new[] { 0f, 0f, 1f }, height, triangles = Array.Empty<object>() },
             clips,
             positions = motion.Pos.Select(f => f.Select(V)),
             rotations = motion.Rot.Select(f => f.Select(Matrix)),
         }));
-        _out.WriteLine($"{rigName}: {s.Capsules.Count} capsules, {s.Profiles.Count} feet ({string.Join(", ", s.Profiles.Select(p => names[p.Joint]))}), {motion.Frames} frames, joins at {string.Join(",", cursors)}");
+        _out.WriteLine($"{rigName}: {s.Capsules.Count} capsules, {s.Profiles.Count} feet ({string.Join(", ", s.Profiles.Select(p => s.Names[p.Joint]))}), {motion.Frames} frames, joins at {string.Join(",", cursors)}");
     }
 
     public static IEnumerable<object[]> Fixtures() => Directory.Exists(Dir)
         ? Directory.GetFiles(Dir, "*_expected.json").Select(f => new object[] { Path.GetFileName(f).Replace("_expected.json", "") })
         : Array.Empty<object[]>();
 
-    [Theory]
-    [MemberData(nameof(Fixtures))]
-    public void CleanupMatchesUniMatesAddon(string rigName)
+    /// <summary>A fixture input: the add-on's skeleton, the clip (offsets at rest) and where prompts meet.</summary>
+    public static (UniMateCleanup.Skeleton Skeleton, UniMateCleanup.Motion Motion, List<int> Cursors) LoadInput(string rigName)
     {
         var input = JsonDocument.Parse(File.ReadAllText(Path.Combine(Dir, $"{rigName}_input.json"))).RootElement;
-        var expected = JsonDocument.Parse(File.ReadAllText(Path.Combine(Dir, $"{rigName}_expected.json"))).RootElement;
         var parents = input.GetProperty("parents").EnumerateArray().Select(x => x.GetInt32()).ToArray();
         var heads = input.GetProperty("heads").EnumerateArray().Select(V).ToArray();
         var s = new UniMateCleanup.Skeleton
@@ -129,6 +128,19 @@ public class UpstreamCleanupTests
             Offset = pos.Select(f => Enumerable.Range(0, parents.Length).Select(j => parents[j] < 0 ? Vector3.Zero : heads[j] - heads[parents[j]]).ToArray()).ToArray(),
         };
         var cursors = input.GetProperty("clips").EnumerateArray().Skip(1).Select(c => c.GetProperty("start").GetInt32() - 1).ToList();
+        if (input.TryGetProperty("soles", out var soles) && soles.ValueKind == JsonValueKind.Object)
+            s.Soles = soles.EnumerateObject().ToDictionary(p => int.Parse(p.Name), p => V(p.Value));
+        return (s, motion, cursors);
+    }
+
+    [Theory]
+    [MemberData(nameof(Fixtures))]
+    public void CleanupMatchesUniMatesAddon(string rigName)
+    {
+        var expected = JsonDocument.Parse(File.ReadAllText(Path.Combine(Dir, $"{rigName}_expected.json"))).RootElement;
+        var (s, motion, cursors) = LoadInput(rigName);
+        s.Soles = null; // the add-on as it is: contact at its capsules
+        var parents = s.Parents; var heads = s.Heads;
         var stages = Environment.GetEnvironmentVariable("T2A_CLEANUP_STAGES");
         void Stage(string name)
         {
