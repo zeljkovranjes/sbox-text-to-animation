@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Plain .NET test harness for the pure-C# core (Code/TextToAnimation). The s&box editor compiles the
+       same sources in-engine; this project only exists so the core can be unit tested from the command line. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>1701;1702;1591;8632;CS8632</NoWarn>
+    <RootNamespace>TextToAnimation.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\Code\TextToAnimation\**\*.cs" LinkBase="Core" />
+    <!-- Editor-assembly code with no Sandbox dependency (workspace store, inference runtime) -->
+    <Compile Include="..\..\Editor\Workspace\**\*.cs" LinkBase="EditorCore\Workspace" />
+    <Compile Include="..\..\Editor\Formats\**\*.cs" LinkBase="EditorCore\Formats" />
+    <Compile Include="..\..\Editor\Mapping\**\*.cs" LinkBase="EditorCore\Mapping" />
+    <Compile Include="..\..\Editor\Inference\**\*.cs" LinkBase="EditorCore\Inference" />
+    <Compile Include="..\..\Editor\Generation\**\*.cs" LinkBase="EditorCore\Generation" />
+    <Compile Include="..\..\Editor\Engine\FbxSkin.cs" Link="EditorCore\Engine\FbxSkin.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

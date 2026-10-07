@@ -2,7 +2,7 @@
 #
 # Creates a scratch s&box game project OUTSIDE the repo, links this library into it (NTFS junction),
 # launches its own sbox-dev.exe on it and waits for the in-editor hook
-# (Editor/TextToAnimation/Testing/EditorGate.cs, armed by T2A_GATE + a one-shot .arm marker) to write a
+# (Editor/Testing/EditorGate.cs, armed by T2A_GATE + a one-shot .arm marker) to write a
 # JSON result. Then scans this run's slice of sbox-dev.log for compile / whitelist errors in our code.
 # Only the editor process started here is ever stopped.
 #
