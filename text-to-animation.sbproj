@@ -11,9 +11,10 @@
   "Mounts": null,
   "IsStandaloneOnly": false,
   "Metadata": {
-    "Summary": "Generate and edit animations for any s&box model from text - UniMate built into a native animation editor, pure C#.",
-    "Description": "Text to Animation turns prompts like \"walk cautiously forward, look behind, then run\" into real, compiled s&box animations for your own models, and gives you a clip editor to trim, loop, fix root motion and pose bones before saving straight back into the vmdl.\n\nEverything runs inside the editor in pure C# - no Python, no external tools. The UniMate model is downloaded once with one click.",
-    "WebsiteUrl": "",
+    "Summary": "Generates and edits animations for any rigged s&box model from text prompts, with UniMate running in C#.",
+    "Description": "Turns prompts like \"walk cautiously forward, look behind, then run\" into compiled animations for your own rigged models, using a pure C# port of UniMate inside the editor. A clip editor lets you trim, loop, fix root motion and foot sliding, and pose bones before saving straight back into the VMDL. Open it from View > Text to Animation or by right-clicking a model; the 769 MB model downloads once with one click.",
+    "WebsiteUrl": "https://github.com/zeljkovranjes/sbox-text-to-animation",
+    "Tags": [ "animation", "ai", "text-to-motion", "unimate", "editor-tool" ],
     "Compiler": {
       "ReleaseMode": "Release"
     }

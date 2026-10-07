@@ -19,7 +19,7 @@ import numpy as np
 ROOT = sys.argv[1]
 DATA = r"D:\99-scratch\uniml3d"
 sources = [np.load(os.path.join(DATA, f"features__{d}__cond.npy"), allow_pickle=True).item() for d in ("objaverse", "truebones")]
-held = {s["key"] for s in json.load(open(os.path.join(ROOT, "dev/Tests/fixtures/upstream_names/dataset_skeletons.json")))}
+held = {s["key"] for s in json.load(open(os.path.join(ROOT, "tests/TextToAnimation.Tests/fixtures/upstream_names/dataset_skeletons.json")))}
 
 
 def norm(raw):
@@ -88,6 +88,6 @@ static partial class UniMateNameTable
 	const string RigFaceEntries = {json.dumps(rig_face_lines)};
 }}
 '''
-open(os.path.join(ROOT, "Editor/TextToAnimation/Inference/UniMate/UniMateNameTable.Data.cs"), "w", encoding="utf-8").write(cs)
-json.dump(build(held), open(os.path.join(ROOT, "dev/Tests/fixtures/upstream_names/name_table_heldout.json"), "w"))
+open(os.path.join(ROOT, "Editor/Inference/UniMate/UniMateNameTable.Data.cs"), "w", encoding="utf-8").write(cs)
+json.dump(build(held), open(os.path.join(ROOT, "tests/TextToAnimation.Tests/fixtures/upstream_names/name_table_heldout.json"), "w"))
 print(f"{len(full)} names, {len(labels)} labels, {len(rig_faces)} rigs")

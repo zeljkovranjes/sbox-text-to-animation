@@ -46,7 +46,7 @@ for p in prompts:
         continue
     seen.add(p)
     cases.append([p, tok(p)["input_ids"]])
-out = os.path.join(ROOT, "dev/Tests/fixtures/upstream_text/t5_token_ids.json")
+out = os.path.join(ROOT, "tests/TextToAnimation.Tests/fixtures/upstream_text/t5_token_ids.json")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump({"tokenizer": f"{type(tok).__name__} (transformers {transformers.__version__})", "cases": cases},
           open(out, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
