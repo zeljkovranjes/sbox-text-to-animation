@@ -23,3 +23,5 @@ __pycache__/
 dev/data/
 .claude/settings.local.json
 DISCORD.md
+CLAUDE.md
+DEVLOG.md
